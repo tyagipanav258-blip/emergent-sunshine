@@ -1,0 +1,46 @@
+export const theme = {
+  colors: {
+    surface: '#FDFBF7',
+    onSurface: '#1F1A17',
+    surfaceSecondary: '#F4EFEA',
+    onSurfaceSecondary: '#38302A',
+    surfaceTertiary: '#EBE3DB',
+    onSurfaceTertiary: '#4A4038',
+    surfaceInverse: '#2B2521',
+    onSurfaceInverse: '#FDFBF7',
+    brand: '#E65C2B',
+    brandDark: '#D24817',
+    brandLight: '#F9E3DA',
+    onBrand: '#FFFFFF',
+    onBrandLight: '#BA3A0A',
+    success: '#2D7A4D',
+    warning: '#B56D00',
+    error: '#CC3333',
+    border: '#E6DFD8',
+    borderStrong: '#D1C7BD',
+    muted: '#7A6E64',
+  },
+  font: {
+    sm: 14,
+    base: 18,
+    lg: 22,
+    xl: 28,
+    xxl: 36,
+  },
+  space: {
+    xs: 8,
+    sm: 12,
+    md: 16,
+    lg: 24,
+    xl: 32,
+    xxl: 48,
+  },
+  radius: {
+    sm: 12,
+    md: 20,
+    lg: 28,
+    pill: 999,
+  },
+};
+
+export const API = process.env.EXPO_PUBLIC_BACKEND_URL + '/api';
