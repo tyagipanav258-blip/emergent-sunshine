@@ -1,43 +1,54 @@
-# Sunshine — PRD
+# Sunshine — PRD (v2: Two-sided family app)
 
 ## What it is
-A warm, elderly-friendly (60–80) mobile social + wellbeing app built in React Native (Expo SDK 54) with a FastAPI + MongoDB backend. Feels like Instagram's familiarity + a family connection layer + a light health companion.
+Sunshine is a warm, elder-friendly (60–80, India) social + wellbeing app, now TWO-SIDED:
+- **Elder app** (phone + 4-digit PIN login)
+- **Child/family companion app** (email + password login), linked to the elder via a **family code**.
+Chosen by role at login. Full rebrand: **Deep Sage Green (#3A5A40) + Soft Marigold (#FFB703)** on warm cream. Creative vector logo (sun + leaf) + "Sunshine" wordmark. NO orange.
 
-## Bottom Navigation (4 tabs)
-1. **Home** — Vertical short-form Reels feed (auto-play). For You + category chips (All, Exercise, Yoga, Recipes, Travel, Music, Tips, Learning). Right-rail actions: Like, Save, Share, Voice (AI). Bottom overlay: creator, title, description, "Swipe for next".
-2. **News** — Instagram-style horizontal "Family Updates" stories (Daughter, Son, Grandchildren, Voice Note, Family Album) + "Today's News" cards with category chips (All, Local, India, World, Community, Weather) and Save.
-3. **Health** — "Good {time-of-day}, Kamala" greeting, prominent red SOS button (opens confirmation sheet + "Family Alerted" message), Today's Medicines (tap to mark taken), Upcoming appointment card, 2×2 action grid (Medicines, Appointments, Doctor, My Care).
-4. **Profile** — Photo, name, prominent "I'm Okay" button (calls backend), Quick Accessibility toggles (larger text, higher contrast), settings list (Family connections, Saved videos, Saved news, Accessibility, Notifications, Family sharing, Help).
+## Auth / RBAC (custom JWT, pwdlib argon2, pyjwt)
+- Elder: `POST /api/auth/elder/signup|login` (phone + 4-digit PIN). Signup returns a `family_code` and seeds medicines + appointments.
+- Child: `POST /api/auth/child/signup|login` (email + password + family_code). Linked via `elder_id`.
+- `GET /api/auth/me`. Role-guarded endpoints (elder-only / child-only return 403 otherwise).
+- Token stored via `@/src/utils/storage` (key `sunshine_token`). Root layout routes by role.
 
-## Backend API (FastAPI, /api prefix)
-- `GET /api/reels?category=...`
-- `POST /api/reels/{id}/like`, `POST /api/reels/{id}/save`
-- `GET /api/family-stories`
-- `GET /api/news?category=...`, `POST /api/news/{id}/save`
-- `GET /api/health/overview` (dynamic greeting by time)
-- `POST /api/health/medicines/{id}/taken`
-- `POST /api/sos` (persists event to Mongo, returns notified contacts)
-- `POST /api/im-okay` (persists event to Mongo)
-- `POST /api/voice/ask` — AI voice-style Q&A using Emergent LLM key (gpt-5.4-mini). Returns 2–4 sentence warm simple answer about the current reel.
+## Elder app (4 tabs: Home, Health, Watch, Profile)
+- **Home = News** (never-ending infinite scroll, `GET /api/news?page=`), NO category chips. Family Updates stories row on top. Story modal.
+- **Health**: greeting; "Did you take your medicine?" intake prompt (big Yes/Not yet); medicines with real pill/type images + stock + low-stock/reorder; taking a low med auto-creates a reorder concierge task. Prescription **OCR** (`POST /api/health/ocr`, Gemini vision) via camera/gallery → add meds. Appointments. Care & Concierge grid + free-text concierge request.
+- **Watch = Content** reels (expo-video) with categories incl. Spiritual/Bhajans/Songs/Devotional + Exercise/Yoga/Recipes/Travel.
+- **Profile**: family code display, "I'm Okay", quick video-call buttons (Daughter/Son/Doctor), **My Requests** (concierge task statuses), accessibility, logout.
+- **Global overlays on all elder screens**: floating **SOS** (red, right) + floating **Voice Assistant** mic (left) → opens Ask Sunshine chat.
 
-## Design tokens (design_guidelines.json)
-- Warm cream surface (#FDFBF7), orange brand (#E65C2B), high contrast onSurface (#1F1A17).
-- Base font 18pt, min touch target 56pt.
-- Haptics on chip press, reel actions, SOS, I'm Okay, tab change.
+## Child app (3 tabs: Dashboard, Tasks, Profile)
+- **Dashboard** (`GET /api/child/analytics`): parent last-active (from activity log), most-used feature, location, medicine stock (low highlighted), appointments, pending task count, video-call parent.
+- **Tasks**: concierge inbox. Approve/Decline → In progress → Done, with progress stepper. Auto-detected reorder tasks flagged.
+- **Profile**: linked-parent, settings, logout.
+
+## AI Concierge (human-in-loop)
+- Elder: `POST /api/concierge/request` (OpenAI classifies kind: reorder/doctor/transport/other → task).
+- `GET /api/concierge/tasks` (elder=own, child=linked elder's).
+- Child: `POST /api/concierge/tasks/{id}/status` (approved|in_progress|done|declined) with timeline.
+
+## Calling
+- `/app/call.tsx` in-app video call UI (connecting→connected, mute/video/end) + "switch to phone call" via device dialer (`tel:`).
+
+## Other
+- `POST /api/activity` logs elder feature use (drives child analytics).
+- `POST /api/sos` (all), `POST /api/im-okay` (elder), `POST /api/notify`.
+- Ask Sunshine chat: `POST /api/assistant/chat` (Gemini 3.1 Pro, multi-turn, stored history), `GET /api/assistant/history`.
+- Voice ask on reels: `POST /api/voice/ask` (gpt-5.4-mini).
 
 ## Integrations
-- **Emergent LLM key** — gpt-5.4-mini (OpenAI) via emergentintegrations for reel Voice AI + voice-search category matching.
-- **OpenAI Whisper** — speech-to-text for Voice Search Reels (`/api/reels/voice-search`).
-- **Google Gemini (gemini-3.1-pro-preview)** — powers the "Ask Sunshine" conversational assistant (`/api/assistant/chat`, `/api/assistant/history`). Multi-turn context via MongoDB-stored history; warm, simple, elderly-friendly system prompt. Entry points: floating "Ask" button on Home + "Ask Sunshine" card in Profile. Route: `app/assistant.tsx` (modal). Session persisted locally via `@/src/utils/storage`.
-- **react-native-keyboard-controller** — reliable chat keyboard experience (KeyboardProvider at root, KeyboardAvoidingView in assistant).
-- **expo-video** for real short sample videos on Reels.
-- **expo-audio** for voice recording (Voice Search).
-- **expo-haptics** for tactile feedback.
+- Custom JWT + RBAC (pyjwt + pwdlib argon2, motor).
+- Emergent LLM key: Gemini 3.1 Pro (assistant, OCR vision), gpt-5.4-mini (voice ask, concierge classify).
+- expo-video, expo-audio, expo-image-picker (OCR capture), react-native-keyboard-controller, expo-haptics.
 
-## What's MOCKED / prototype
-- Video URLs are Google's public sample videos (unrelated to titles) — the reel overlay (creator/title/description/category) sells the intent.
-- Family Stories, News, Medicines, Appointments are in-memory seed data.
-- SOS + I'm Okay only persist events to Mongo; no real SMS/call.
+## Test accounts
+- Elder: phone `9876543210`, PIN `1234` (family code visible in Elder Profile).
+- Child: `priya@test.com` / `secret123` (linked to the elder above).
 
-## Business angle
-Sunshine is a low-friction social + wellbeing platform for older adults — a growing, underserved segment. Monetisation angles for later: premium family plan (unlimited family members + priority SOS routing), branded partner content (recipe/yoga creators), tele-consultation revenue share.
+## Prototype notes / backlog (phase 2)
+- Calls are prototype UI + device dialer (real video needs native build + keys).
+- OCR is real (Gemini vision). Reorder is auto-triggered on low stock.
+- Sample reel videos are public Google samples; overlay carries the story.
+- Backlog: assistant-driven actions (call/notify from chat), object storage for prescription images, push notifications, larger-text global scaling.

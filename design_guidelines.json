@@ -1,69 +1,69 @@
 {
   "app_name": "Sunshine",
-  "personality": "4 Tactile / Playful LIGHT (Adapted for Seniors: high contrast, large UI, warm earthy palette)",
-  "personality_one_liner": "A warm, reassuring, and highly readable space that feels like a friendly companion, avoiding any clinical or 'senior' stereotypes.",
+  "personality": "1 iOS-Native Clean (Adapted for Elderly Accessibility)",
+  "personality_one_liner": "A deeply reassuring, highly legible companion that feels like a caring family member, not a clinical tool.",
   "color": {
     "surface": "#FDFBF7",
-    "onSurface": "#1F1A17",
-    "surfaceSecondary": "#F4EFEA",
-    "onSurfaceSecondary": "#38302A",
-    "surfaceTertiary": "#EBE3DB",
-    "onSurfaceTertiary": "#4A4038",
-    "surfaceInverse": "#2B2521",
-    "onSurfaceInverse": "#FDFBF7",
-    "brand": "#E65C2B",
-    "brandPrimary": "#E65C2B",
+    "onSurface": "#1A2015",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1A2015",
+    "surfaceTertiary": "#F2EFE9",
+    "onSurfaceTertiary": "#3A5A40",
+    "surfaceInverse": "#2C3F2F",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#3A5A40",
+    "brandPrimary": "#3A5A40",
     "onBrandPrimary": "#FFFFFF",
-    "brandSecondary": "#D24817",
-    "onBrandSecondary": "#FFFFFF",
-    "brandTertiary": "#F9E3DA",
-    "onBrandTertiary": "#BA3A0A",
-    "success": "#2D7A4D",
+    "brandSecondary": "#FFB703",
+    "onBrandSecondary": "#1A2015",
+    "brandTertiary": "#EAE6DF",
+    "onBrandTertiary": "#3A5A40",
+    "success": "#2D6A4F",
     "onSuccess": "#FFFFFF",
-    "warning": "#B56D00",
-    "onWarning": "#FFFFFF",
-    "error": "#CC3333",
+    "warning": "#FFB703",
+    "onWarning": "#1A2015",
+    "error": "#D62828",
     "onError": "#FFFFFF",
-    "border": "#E6DFD8",
-    "borderStrong": "#D1C7BD",
-    "divider": "#E6DFD8"
+    "info": "#457B9D",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E2DA",
+    "borderStrong": "#C8C4B7",
+    "divider": "#E5E2DA"
   },
   "typography": {
-    "displayFontFamily": "Figtree",
-    "textFontFamily": "Figtree",
+    "displayFontFamily": "Plus Jakarta Sans",
+    "textFontFamily": "Plus Jakarta Sans",
     "scale": {
       "sm": 14,
       "base": 18,
-      "lg": 22,
-      "xl": 28,
-      "2xl": 36
+      "lg": 20,
+      "xl": 24,
+      "2xl": 32
     }
   },
   "spacing": {
-    "rule": "Generous spacing. Min 16px between interactive elements to accommodate fine motor control. Large touch targets.",
+    "rule": "Generous touch targets (min 48x48pt for interactive elements) and high visual separation to reduce cognitive load.",
     "xs": 8,
     "sm": 12,
     "md": 16,
     "lg": 24,
     "xl": 32,
-    "2xl": 48,
-    "3xl": 64
+    "2xl": 40,
+    "3xl": 56
   },
   "radius_tokens": {
-    "sm": 12,
-    "md": 20,
-    "lg": 28,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
     "pill": 999
   },
   "shadow_tier": "1",
   "navigation": "bottom_tabs",
-  "icon_set": "Phosphor",
+  "icon_set": "Ionicons",
   "glassmorphism": {
     "enabled": "false",
-    "do's": [],
-    "dont's": [
-      "Do not use glass or blur anywhere. Flat, high-contrast surfaces are critical for elderly cognitive clarity."
-    ]
+    "do's": ["Use solid colors for high contrast and extreme readability."],
+    "dont's": ["Do not use blur or glass effects as they reduce perceptibility for elderly users with visual impairments."]
   },
   "platform_libraries": {
     "glass": {
@@ -72,103 +72,147 @@
       "low_end_android_fallback": "solid surfaceSecondary"
     },
     "image": "expo-image",
-    "blur": "solid surfaceSecondary",
+    "blur": "expo-blur",
     "bottom_sheet": "@gorhom/bottom-sheet",
     "animation": "react-native-reanimated",
     "gesture": "react-native-gesture-handler"
   },
   "screens": [
     {
-      "name": "Home",
-      "purpose": "Full-screen vertical reels feed for discovering wellbeing, recipes, and travel.",
+      "name": "RoleChooser",
+      "purpose": "A warm, reassuring entry point asking who is using the app.",
       "states": {
-        "loading": "Centered warm orange spinner on dark background (since reels are full-screen).",
-        "empty": "Illustration of a sunny day, 'No new videos right now', 'Refresh' button.",
-        "error": "Readable error message, 'Tap to retry' button."
-      },
-      "layout": "Full-screen video player (like Instagram Reels). Top safe area contains horizontal scrolling category chips (All, Exercise, Yoga, etc.). 'All' chip is brandPrimary, others are surfaceInverse with borderStrong. Right-rail stack for actions (Heart, Save, Share, Voice Mic). Bottom safe area contains Creator info (avatar, name), large title ('5-Minute Morning Stretch'), 2-line description, and a '^ Swipe for next' hint. All text on video must use a gradient scrim (top-to-bottom transparent to 80% surfaceInverse) to ensure AAA readability."
-    },
-    {
-      "name": "News",
-      "purpose": "A hub for Family Updates (Stories) and Today's News (Feed).",
-      "states": {
-        "loading": "Skeleton cards with soft pulsing.",
-        "empty": "Illustration of a newspaper, 'No news today', 'Refresh' button.",
-        "error": "Readable error message, 'Tap to retry' button."
-      },
-      "layout": "Top section: 'Family Updates' horizontal scrolling list of large story circles (min 72x72) with labels (Daughter, Son, Voice Note). Below: 'Today's News' vertical feed of large cards. Each card has a large image, category tag, large title, and date. Cards use surfaceSecondary on surface background, with shadow_tier 1. Use generous md (16px) padding between all elements."
-    },
-    {
-      "name": "Health",
-      "purpose": "Large, clear dashboard for medicines, appointments, and emergency SOS.",
-      "states": {
-        "loading": "Skeleton cards with soft pulsing.",
-        "empty": "Illustration of a health cross, 'All caught up', 'Add Medicine' button.",
-        "error": "Readable error message, 'Tap to retry' button."
-      },
-      "layout": "Header: Large greeting 'Good morning, Kamala'. Top right: profile avatar. Top section: Huge, full-width red SOS button ('error' color) for emergencies. Below: Grid or list of large rounded cards (Medicines, Appointments, Doctor, My Care). Each card needs an icon, large label, and simple secondary text ('2 due today'). Avoid complex charts. Use high contrast for all text."
-    },
-    {
-      "name": "Profile",
-      "purpose": "User settings, accessibility toggles, and 'I'm Okay' reassurance.",
-      "states": {
-        "loading": "Centered spinner.",
+        "loading": "Spinner centered",
         "empty": "N/A",
-        "error": "Readable error message, 'Tap to retry' button."
+        "error": "N/A"
       },
-      "layout": "Top section: Profile picture, Name, and a prominent 'I'm Okay' success-colored button to alert family. Below: A list of setting rows (Saved Videos, Accessibility, Notifications, Help). Each row uses a tinted icon container, large text, and a chevron. Rows must have min 56pt height and clear dividers."
+      "layout": "Massive logo at top. Two giant primary buttons ('I am using this for myself', 'I am a family member'). High contrast text."
+    },
+    {
+      "name": "LoginElder",
+      "purpose": "Frictionless authentication for seniors using a massive keypad.",
+      "states": {
+        "loading": "Button shows loading state.",
+        "empty": "N/A",
+        "error": "Inline text below PIN."
+      },
+      "layout": "Large instructions. Huge numeric keypad taking up the bottom 60% of the screen. 4 massive circles for PIN input. No complex text fields."
+    },
+    {
+      "name": "LoginChild",
+      "purpose": "Standard email/password login for the family member.",
+      "states": {
+        "loading": "Button shows loading state.",
+        "empty": "N/A",
+        "error": "Standard form error."
+      },
+      "layout": "Standard form layout with inputs for Email, Password, and Family Link Code. Sticky submit button at bottom."
+    },
+    {
+      "name": "Elder_Home",
+      "purpose": "Never-ending news feed combined with family updates.",
+      "states": {
+        "loading": "Skeleton cards.",
+        "empty": "No news available, show check back later.",
+        "error": "Could not load feed, tap to retry."
+      },
+      "layout": "Top row: horizontal scroll of 'Family Updates' (big avatars of children). Below: Infinite vertical feed of news cards (large images, large text, NO category chips at top)."
+    },
+    {
+      "name": "Elder_Health",
+      "purpose": "Track medications, intake, and reorders simply.",
+      "states": {
+        "loading": "Skeleton rows.",
+        "empty": "No medicines prescribed yet.",
+        "error": "Error loading health profile."
+      },
+      "layout": "Top section: 'Did you take your medicine?' with massive 'YES' and 'NOT YET' buttons. Below: List of meds with real pill images. Floating OCR capture button."
+    },
+    {
+      "name": "Elder_Content",
+      "purpose": "Vertical video feed for Spiritual, Bhajans, and Devotional content.",
+      "states": {
+        "loading": "Video skeleton.",
+        "empty": "No new videos.",
+        "error": "Network error overlay."
+      },
+      "layout": "Full-screen vertical scrolling reels layout. Simple right-side actions (Like, Share). Very obvious UI."
+    },
+    {
+      "name": "Elder_Profile",
+      "purpose": "Simple settings and concierge request tracking.",
+      "states": {
+        "loading": "Skeleton rows.",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "List view. Prominent 'My Requests' section showing statuses like 'Requested', 'Approved by [Child Name]', 'In Progress'. Contact support."
+    },
+    {
+      "name": "CallScreen",
+      "purpose": "Accessible video/phone call interface.",
+      "states": {
+        "loading": "Connecting...",
+        "empty": "N/A",
+        "error": "Call failed."
+      },
+      "layout": "Massive central avatar. Big typography 'Connecting to Amit'. Three giant circular buttons at bottom: Mute, Video Toggle, End Call."
+    },
+    {
+      "name": "Child_Dashboard",
+      "purpose": "Provide the child with analytical peace of mind regarding their parent.",
+      "states": {
+        "loading": "Skeleton widgets.",
+        "empty": "Awaiting parent activity.",
+        "error": "Sync error."
+      },
+      "layout": "Grid of info cards: Parent's last active time, most-used feature, location snippet, medicine stock levels (highlight low stock). Slightly more data-dense than elder app."
+    },
+    {
+      "name": "Child_TaskInbox",
+      "purpose": "Manage AI concierge requests originating from the parent.",
+      "states": {
+        "loading": "Skeleton rows.",
+        "empty": "No pending tasks.",
+        "error": "Failed to fetch tasks."
+      },
+      "layout": "List of action-required cards (e.g., 'Medicine running low - Reorder requested'). Approve / Arrange buttons. Status tracking workflow."
     }
   ],
   "images": {
-    "avatar_kamala": {
-      "url": "https://images.unsplash.com/photo-1590905707155-17c680dd7867?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHxJbmRpYW4lMjBncmFuZG1vdGhlciUyMHBvcnRyYWl0JTIwc21pbGluZyUyMGZhY2V8ZW58MHx8fHwxNzg2ODE1MDQ1fDA&ixlib=rb-4.1.0&q=85",
-      "alt": "Kamala profile picture"
+    "family_avatar_1": {
+      "url": "https://images.unsplash.com/photo-1567122087721-47b09b61e1d1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHw0fHxoYXBweSUyMGluZGlhbiUyMGZhbWlseSUyMHNtaWxpbmclMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODY5MTM1MzJ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Smiling family member"
     },
-    "avatar_meena": {
-      "url": "https://images.unsplash.com/photo-1564356533237-46945af0eb1e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHxJbmRpYW4lMjB3b21hbiUyMHlvZ2ElMjBtb3JuaW5nJTIwc3RyZXRjaHxlbnwwfHx8fDE3ODY4MTUwNDV8MA&ixlib=rb-4.1.0&q=85",
-      "alt": "Meena creator avatar"
+    "family_avatar_2": {
+      "url": "https://images.unsplash.com/photo-1609253919256-74a3b8f1cd5e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MDZ8MHwxfHNlYXJjaHwzfHxoYXBweSUyMGluZGlhbiUyMGZhbWlseSUyMHNtaWxpbmclMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODY5MTM1MzJ8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Family members"
     },
-    "avatar_priya": {
-      "url": "https://images.unsplash.com/photo-1706943262459-3ef6ce03305c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHxJbmRpYW4lMjB5b3VuZyUyMHdvbWFuJTIwcG9ydHJhaXQlMjBzbWlsaW5nfGVufDB8fHx8MTc4NjgxNTA0NXww&ixlib=rb-4.1.0&q=85",
-      "alt": "Priya daughter avatar"
+    "yoga_content": {
+      "url": "https://images.unsplash.com/photo-1633844667716-2eb62d7e031a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MDV8MHwxfHNlYXJjaHwyfHxpbmRpYW4lMjBlbGRlcmx5JTIwc2VuaW9yJTIweW9nYSUyMG1lZGl0YXRpb258ZW58MHx8fHwxNzg2OTEzNTMxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Indian senior doing yoga"
     },
-    "avatar_rahul": {
-      "url": "https://images.unsplash.com/photo-1625241152315-4a698f74ceb7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwxfHxJbmRpYW4lMjB5b3VuZyUyMG1hbiUyMHBvcnRyYWl0JTIwc21pbGluZ3xlbnwwfHx8fDE3ODY4MTUwNDV8MA&ixlib=rb-4.1.0&q=85",
-      "alt": "Rahul son avatar"
+    "spiritual_content": {
+      "url": "https://images.unsplash.com/photo-1617904472808-7e038208077a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjY2NzV8MHwxfHNlYXJjaHwzfHxoaW5kdSUyMHRlbXBsZSUyMHNwaXJpdHVhbCUyMG1vcm5pbmd8ZW58MHx8fHwxNzg2OTEzNTMxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Hindu temple silhouette"
     },
-    "avatar_doctor": {
-      "url": "https://images.unsplash.com/photo-1678940805950-73f2127f9d4e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTN8MHwxfHNlYXJjaHwxfHxTZW5pb3IlMjBpbmRpYW4lMjBkb2N0b3IlMjBwb3J0cmFpdHxlbnwwfHx8fDE3ODY4MTUwNDV8MA&ixlib=rb-4.1.0&q=85",
-      "alt": "Doctor portrait"
+    "medicine_pill": {
+      "url": "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA8Mzl8MHwxfHNlYXJjaHwxfHxtZWRpY2luZSUyMHBpbGxzJTIwYmxpc3RlciUyMHBhY2t8ZW58MHx8fHwxNzg2OTEzNTMxfDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Pill blister pack"
     },
-    "thumbnail_yoga": {
-      "url": "https://images.unsplash.com/photo-1564356533237-46945af0eb1e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHxJbmRpYW4lMjB3b21hbiUyMHlvZ2ElMjBtb3JuaW5nJTIwc3RyZXRjaHxlbnwwfHx8fDE3ODY4MTUwNDV8MA&ixlib=rb-4.1.0&q=85",
-      "alt": "Yoga thumbnail"
-    },
-    "thumbnail_poha": {
-      "url": "https://images.unsplash.com/photo-1542367592-8849eb950fd8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwxfHxWZWdldGFibGUlMjBQb2hhJTIwSW5kaWFuJTIwZm9vZHxlbnwwfHx8fDE3ODY4MTUwNDV8MA&ixlib=rb-4.1.0&q=85",
-      "alt": "Vegetable Poha recipe"
-    },
-    "thumbnail_kerala": {
-      "url": "https://images.unsplash.com/photo-1609828913552-f9138ed9e42d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwxfHxLZXJhbGElMjBiYWNrd2F0ZXJzJTIwdHJhdmVsJTIwbGFuZHNjYXBlfGVufDB8fHx8MTc4NjgxNTA0NXww&ixlib=rb-4.1.0&q=85",
-      "alt": "Kerala backwaters travel"
+    "medicine_syrup": {
+      "url": "https://images.unsplash.com/photo-1635166304271-04931640a450?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTJ8MHwxfHNlYXJjaHwxfHxjb3VnaCUyMHN5cnVwJTIwYm90dGxlfGVufDB8fHx8MTc4NjkxMzUzMXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Cough syrup bottle"
     }
   },
   "instructions_to_main_agent": [
-    "Use standard React Native components instead of web idioms. Ensure touch targets are huge (min 56x56) using hitSlop or direct sizing.",
-    "Typography must be massive (base 18pt, lg 22pt) to cater to elderly users. Do NOT use small metadata fonts.",
-    "Contrast is critical: Avoid pure white backgrounds to reduce glare, use the specified off-white/cream palette. Do not use glass/blur effects as they cause cognitive confusion for seniors.",
-    "Home screen: Must perfectly match the reference screenshot requirements. Full-screen reels with top category chips (active chip in warm orange). Bottom safe area has a dark-to-transparent vertical gradient scrim so white text on the video remains legible.",
-    "Reels must implement right-rail action buttons (Heart, Save, Share, Voice Mic). Voice AI feature should show a bottom sheet or a simple overlay when tapped.",
-    "Health Screen: The SOS button must be instantly recognizable, huge, and use the 'error' red color. The simulated SOS flow should trigger a fake 'Family Alerted' toast/bottom sheet.",
-    "News Screen: Implement Instagram-style horizontal stories for family updates. Ensure avatar circles are very large.",
-    "Include 'I'm Okay' one-tap reassurance action prominently on the Profile screen.",
-    "Haptics: Provide tactile feedback on all interactive elements (chips, SOS button, I'm okay button, Reels actions) to assist users with declining fine motor control."
-  ],
-  "haptics": {
-    "chip_press": "light",
-    "reel_action": "medium",
-    "sos_button": "heavy",
-    "im_okay_button": "success",
-    "tab_change": "light"
-  }
+    "LOGO CONCEPT: Create a vector-based layout for the 'Sunshine' logo. Avoid stock emojis. Use Ionicons 'partly-sunny' (or 'sunny-outline') interlocking with 'leaf-outline' in brandSecondary (#FFB703) and brandPrimary (#3A5A40). The wordmark should be in 'Plus Jakarta Sans' bold, maintaining a warm and reassuring feel.",
+    "COLOR PALETTE: Strict adherence to the new palette. NO orange, NO purple, NO medical blue. We are using Deep Sage Green (#3A5A40) for trust/health and Soft Marigold (#FFB703) for warmth/sunshine. Contrast is extremely important.",
+    "TYPOGRAPHY & ACCESSIBILITY: The base font size is bumped to 18pt, with 20pt and 24pt for emphasis. Weight is capped at 500. This is an elder-first app. Touch targets MUST be a minimum of 48x48pt.",
+    "NAVIGATION: 4 tabs for Elder App: Home (News), Health, Content (Reels), Profile. There are NO category chips on the Home screen to maximize screen real estate.",
+    "GLOBAL OVERLAYS (Elder App): Implement a floating SOS button (red, unmistakable but not blocking content) and a floating Voice Assistant button (mic icon, perhaps brandPrimary) present across all elder screens.",
+    "ROLES: Ensure the login flow explicitly splits between Elder (Phone + massive PIN pad) and Child (Email + Password). They lead to entirely different navigation stacks.",
+    "AI CONCIERGE LOOP: The Elder's 'My Requests' view and the Child's 'Task Inbox' must visually mirror each other's status (Requested -> Approved -> In Progress).",
+    "GLASSMORPHISM: DISABLED. Due to accessibility requirements for elderly users, rely entirely on solid colors and strict contrast boundaries instead of blurs."
+  ]
 }

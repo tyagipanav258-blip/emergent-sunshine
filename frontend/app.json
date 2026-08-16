@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.emergent.sunshineapp.jme3k7",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Ask questions about videos using your voice."
+        "NSMicrophoneUsageDescription": "Ask questions about videos using your voice.",
+        "NSCameraUsageDescription": "Scan your prescription to add medicines.",
+        "NSPhotoLibraryUsageDescription": "Choose a prescription photo to add medicines."
       }
     },
     "android": {
@@ -22,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.sunshineapp.jme3k7",
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": ["RECORD_AUDIO", "CAMERA"]
     },
     "web": {
       "bundler": "metro",
@@ -36,6 +38,13 @@
         "expo-audio",
         {
           "microphonePermission": "Ask questions about videos using your voice."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Choose a prescription photo to add medicines.",
+          "cameraPermission": "Scan your prescription to add medicines."
         }
       ],
       [
