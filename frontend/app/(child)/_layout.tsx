@@ -1,5 +1,6 @@
 import { Tabs } from "expo-router";
-import { View, Text, Pressable, StyleSheet, Platform } from "react-native";
+import { View, Pressable, StyleSheet, Platform } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -26,7 +27,7 @@ export default function ChildLayout() {
               <Pressable key={tab.name} testID={tab.testID} style={styles.item} hitSlop={8}
                 onPress={() => { if (Platform.OS !== "web") Haptics.selectionAsync(); navigation.navigate(state.routes[index].name); }}>
                 <Ionicons name={focused ? tab.active : tab.icon} size={28} color={focused ? theme.colors.brand : theme.colors.muted} />
-                <Text style={[styles.label, { color: focused ? theme.colors.brand : theme.colors.muted, fontWeight: focused ? "800" : "600" }]}>{tab.label}</Text>
+                <AppText style={[styles.label, { color: focused ? theme.colors.brand : theme.colors.muted, fontWeight: focused ? "800" : "600" }]}>{tab.label}</AppText>
               </Pressable>
             );
           })}

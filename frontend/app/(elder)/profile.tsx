@@ -1,13 +1,23 @@
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, Platform, Switch, ActivityIndicator } from "react-native";
-import { Image } from "expo-image";
+import { View, StyleSheet, ScrollView, Pressable, Platform, ActivityIndicator, Share } from "react-native";
+import { AppText } from "@/src/components/AppText";
+import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { theme } from "@/src/theme";
+import { useTextScale } from "@/src/text-scale";
+import { theme, TEXT_SCALES, TextScaleKey } from "@/src/theme";
+
+type FamilyMember = { id: string; name: string; relation: string };
+
+const TEXT_SIZE_OPTIONS: { key: TextScaleKey; label: string }[] = [
+  { key: "normal", label: "Normal" },
+  { key: "large", label: "Large" },
+  { key: "larger", label: "Largest" },
+];
 
 type Task = { id: string; kind: string; title: string; detail: string; status: string; timeline: any[] };
 
@@ -23,13 +33,22 @@ export default function ElderProfile() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, signOut } = useAuth();
+  const { key: textScaleKey, setScale } = useTextScale();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [family, setFamily] = useState<FamilyMember[]>([]);
   const [loading, setLoading] = useState(true);
-  const [largeText, setLargeText] = useState(false);
-  const [okay, setOkay] = useState<"idle" | "done">("idle");
+  const [okay, setOkay] = useState<{ state: "idle" | "sent"; message?: string }>({ state: "idle" });
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
-    try { setTasks(await apiFetch<Task[]>("/concierge/tasks")); } catch {}
+    try {
+      const [t, f] = await Promise.all([
+        apiFetch<Task[]>("/concierge/tasks"),
+        apiFetch<{ members: FamilyMember[] }>("/family").catch(() => ({ members: [] })),
+      ]);
+      setTasks(t);
+      setFamily(f.members || []);
+    } catch {}
     setLoading(false);
   }, []);
 
@@ -37,52 +56,140 @@ export default function ElderProfile() {
 
   const sendOkay = async () => {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setOkay("done");
-    try { await apiFetch("/im-okay", { method: "POST" }); } catch {}
-    setTimeout(() => setOkay("idle"), 2500);
+    try {
+      const r = await apiFetch<{ message: string }>("/im-okay", { method: "POST" });
+      setOkay({ state: "sent", message: r.message });
+    } catch {
+      setOkay({ state: "sent", message: "We couldn't reach the network. Please try again." });
+    }
+    setTimeout(() => setOkay({ state: "idle" }), 4000);
+  };
+
+  const inviteText = user?.family_code
+    ? `Join me on Sunshine so you can help look after me. Open this link: sunshine://join?code=${user.family_code} — or enter code ${user.family_code} when you sign up.`
+    : "";
+
+  const shareCode = async () => {
+    if (!user?.family_code) return;
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    try {
+      await Share.share({ message: inviteText });
+    } catch {
+      // Sharing unavailable (or dismissed) — fall back to the copy button below.
+    }
+  };
+
+  const copyCode = async () => {
+    if (!user?.family_code) return;
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    await Clipboard.setStringAsync(user.family_code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
   };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="elder-profile">
       <ScrollView contentContainerStyle={{ paddingBottom: 200 }} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Image source={{ uri: "https://images.unsplash.com/photo-1590905707155-17c680dd7867?w=400&q=80" }} style={styles.avatar} />
-          <Text style={styles.name}>{user?.name}</Text>
-          <Text style={styles.sub}>{user?.location || "India"}</Text>
+          <View style={styles.avatar} accessible accessibilityLabel={`Profile picture for ${user?.name || "you"}`}>
+            <Ionicons name="person" size={48} color={theme.colors.brand} />
+          </View>
+          <AppText style={styles.name}>{user?.name}</AppText>
+          {user?.location ? <AppText style={styles.sub}>{user.location}</AppText> : null}
         </View>
 
         {/* Family code */}
         <View style={styles.codeCard} testID="family-code-card">
-          <View style={{ flex: 1 }}>
-            <Text style={styles.codeLabel}>Your family code</Text>
-            <Text style={styles.codeValue}>{user?.family_code}</Text>
-            <Text style={styles.codeHint}>Share this with your son or daughter so they can connect.</Text>
+          <View style={styles.codeTop}>
+            <View style={{ flex: 1 }}>
+              <AppText style={styles.codeLabel}>Your family code</AppText>
+              <AppText
+                style={styles.codeValue}
+                accessibilityLabel={`Your family code is ${user?.family_code?.split("").join(" ")}`}
+              >
+                {user?.family_code}
+              </AppText>
+            </View>
+            <Ionicons name="people-circle" size={44} color={theme.colors.brand} />
           </View>
-          <Ionicons name="people-circle" size={44} color={theme.colors.brand} />
+          <AppText style={styles.codeHint}>
+            {family.length > 0
+              ? `${family.map((f) => f.name).join(", ")} ${family.length === 1 ? "is" : "are"} connected. Share the code to add someone else.`
+              : "Nobody is connected yet. Send this to your son or daughter so they can look after you."}
+          </AppText>
+          <View style={styles.codeBtns}>
+            <Pressable
+              style={styles.shareBtn}
+              onPress={shareCode}
+              testID="share-family-code"
+              accessibilityRole="button"
+              accessibilityLabel="Share your family code"
+              accessibilityHint="Opens your phone's share options so you can send an invite"
+            >
+              <Ionicons name="share-social" size={22} color="#fff" />
+              <AppText style={styles.shareBtnText}>Invite family</AppText>
+            </Pressable>
+            <Pressable
+              style={styles.copyBtn}
+              onPress={copyCode}
+              testID="copy-family-code"
+              accessibilityRole="button"
+              accessibilityLabel={copied ? "Family code copied" : "Copy your family code"}
+            >
+              <Ionicons name={copied ? "checkmark" : "copy-outline"} size={20} color={theme.colors.brand} />
+              <AppText style={styles.copyBtnText}>{copied ? "Copied" : "Copy"}</AppText>
+            </Pressable>
+          </View>
         </View>
 
         {/* I'm Okay */}
-        <Pressable style={[styles.okay, okay === "done" && { backgroundColor: theme.colors.success }]} onPress={sendOkay} testID="im-okay-btn">
-          <View style={styles.okayIcon}><Ionicons name={okay === "done" ? "checkmark-circle" : "sunny"} size={30} color="#fff" /></View>
+        <Pressable
+          style={[styles.okay, okay.state === "sent" && { backgroundColor: theme.colors.success }]}
+          onPress={sendOkay}
+          testID="im-okay-btn"
+          accessibilityRole="button"
+          accessibilityLabel="I'm okay"
+          accessibilityHint="Lets your connected family know you are doing well"
+        >
+          <View style={styles.okayIcon}>
+            <Ionicons name={okay.state === "sent" ? "checkmark-circle" : "sunny"} size={30} color="#fff" />
+          </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.okayTitle}>{okay === "done" ? "Family notified" : "I'm Okay"}</Text>
-            <Text style={styles.okaySub}>{okay === "done" ? "They know you're doing well" : "One tap to reassure your family"}</Text>
+            <AppText style={styles.okayTitle}>{okay.state === "sent" ? "Sent" : "I'm Okay"}</AppText>
+            <AppText style={styles.okaySub}>
+              {okay.state === "sent" ? okay.message : "One tap to reassure your family"}
+            </AppText>
           </View>
         </Pressable>
 
-        {/* Quick call */}
-        <Text style={styles.section}>Stay Connected</Text>
-        <View style={styles.callRow}>
-          <CallBtn name="Priya" who="daughter" icon="woman" onPress={() => router.push({ pathname: "/call", params: { name: "Priya", who: "daughter" } })} />
-          <CallBtn name="Rahul" who="son" icon="man" onPress={() => router.push({ pathname: "/call", params: { name: "Rahul", who: "son" } })} />
-          <CallBtn name="Doctor" who="doctor" icon="medkit" onPress={() => router.push({ pathname: "/call", params: { name: "Dr. Sharma", who: "doctor" } })} />
-        </View>
+        {/* Real family only */}
+        <AppText style={styles.section}>Stay Connected</AppText>
+        {family.length === 0 ? (
+          <View style={styles.emptyCard} testID="family-empty">
+            <Ionicons name="people-outline" size={34} color={theme.colors.muted} />
+            <AppText style={styles.emptyTitle}>No family connected yet</AppText>
+            <AppText style={styles.empty}>
+              When someone joins with your family code they will appear here, and you can call them with one tap.
+            </AppText>
+          </View>
+        ) : (
+          <View style={styles.callRow}>
+            {family.map((f) => (
+              <CallBtn
+                key={f.id}
+                name={f.name.split(" ")[0]}
+                relation={f.relation}
+                onPress={() => router.push({ pathname: "/call", params: { name: f.name, who: f.relation } })}
+              />
+            ))}
+          </View>
+        )}
 
         {/* My Requests (concierge) */}
-        <Text style={styles.section}>My Requests</Text>
+        <AppText style={styles.section}>My Requests</AppText>
         {loading ? <ActivityIndicator color={theme.colors.brand} style={{ marginVertical: 20 }} /> :
           tasks.length === 0 ? (
-            <Text style={styles.empty}>No requests yet. Ask Sunshine to arrange something from the Health screen.</Text>
+            <AppText style={styles.empty}>No requests yet. Ask Sunshine to arrange something from the Health screen.</AppText>
           ) : (
             <View style={{ gap: 12, paddingHorizontal: 20 }}>
               {tasks.map((t) => {
@@ -90,13 +197,13 @@ export default function ElderProfile() {
                 return (
                   <View key={t.id} style={styles.taskCard} testID={`task-${t.id}`}>
                     <View style={styles.taskTop}>
-                      <Text style={styles.taskTitle}>{t.title}</Text>
+                      <AppText style={styles.taskTitle}>{t.title}</AppText>
                       <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}>
                         <Ionicons name={m.icon} size={14} color={m.color} />
-                        <Text style={[styles.statusText, { color: m.color }]}>{m.label}</Text>
+                        <AppText style={[styles.statusText, { color: m.color }]}>{m.label}</AppText>
                       </View>
                     </View>
-                    <Text style={styles.taskDetail}>{t.detail}</Text>
+                    <AppText style={styles.taskDetail}>{t.detail}</AppText>
                   </View>
                 );
               })}
@@ -104,29 +211,63 @@ export default function ElderProfile() {
           )}
 
         {/* Accessibility */}
-        <Text style={styles.section}>Accessibility</Text>
+        <AppText style={styles.section}>Text size</AppText>
         <View style={styles.toggleCard}>
           <View style={styles.toggleRow}>
             <View style={styles.toggleIcon}><Ionicons name="text" size={22} color={theme.colors.brand} /></View>
-            <Text style={styles.toggleLabel}>Larger text</Text>
-            <Switch value={largeText} onValueChange={setLargeText} trackColor={{ true: theme.colors.brand, false: theme.colors.borderStrong }} thumbColor="#fff" testID="toggle-large-text" />
+            <AppText style={styles.toggleLabel}>Make text bigger everywhere</AppText>
+          </View>
+          <View style={styles.sizeRow} accessibilityRole="radiogroup">
+            {TEXT_SIZE_OPTIONS.map((o) => {
+              const on = o.key === textScaleKey;
+              return (
+                <Pressable
+                  key={o.key}
+                  style={[styles.sizeBtn, on && styles.sizeBtnOn]}
+                  onPress={() => {
+                    if (Platform.OS !== "web") Haptics.selectionAsync();
+                    setScale(o.key);
+                  }}
+                  testID={`text-size-${o.key}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`${o.label} text size`}
+                >
+                  <AppText style={[styles.sizeBtnSample, { fontSize: Math.round(17 * TEXT_SCALES[o.key]) }, on && styles.sizeBtnTextOn]}>Aa</AppText>
+                  <AppText style={[styles.sizeBtnText, on && styles.sizeBtnTextOn]}>{o.label}</AppText>
+                </Pressable>
+              );
+            })}
           </View>
         </View>
 
-        <Pressable style={styles.logout} onPress={signOut} testID="logout-btn">
+        <Pressable
+          style={styles.logout}
+          onPress={signOut}
+          testID="logout-btn"
+          accessibilityRole="button"
+          accessibilityLabel="Log out of Sunshine"
+        >
           <Ionicons name="log-out-outline" size={24} color={theme.colors.error} />
-          <Text style={styles.logoutText}>Log out</Text>
+          <AppText style={styles.logoutText}>Log out</AppText>
         </Pressable>
       </ScrollView>
     </View>
   );
 }
 
-function CallBtn({ name, icon, onPress }: any) {
+function CallBtn({ name, relation, onPress }: { name: string; relation?: string; onPress: () => void }) {
   return (
-    <Pressable style={styles.callBtn} onPress={onPress} testID={`call-${name}`}>
-      <View style={styles.callIcon}><Ionicons name={icon} size={30} color={theme.colors.brand} /></View>
-      <Text style={styles.callName}>{name}</Text>
+    <Pressable
+      style={styles.callBtn}
+      onPress={onPress}
+      testID={`call-${name}`}
+      accessibilityRole="button"
+      accessibilityLabel={relation ? `Call ${name}, your ${relation.toLowerCase()}` : `Call ${name}`}
+    >
+      <View style={styles.callIcon}><Ionicons name="person" size={30} color={theme.colors.brand} /></View>
+      <AppText style={styles.callName}>{name}</AppText>
+      {relation ? <AppText style={styles.callRelation}>{relation}</AppText> : null}
       <View style={styles.callGo}><Ionicons name="call" size={16} color="#fff" /></View>
     </Pressable>
   );
@@ -135,13 +276,45 @@ function CallBtn({ name, icon, onPress }: any) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
   header: { alignItems: "center", paddingTop: 16 },
-  avatar: { width: 100, height: 100, borderRadius: 50, borderWidth: 4, borderColor: theme.colors.brandLight },
-  name: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, marginTop: 12 },
-  sub: { fontSize: 16, color: theme.colors.muted },
-  codeCard: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20, marginTop: 20, backgroundColor: theme.colors.brandLight, borderRadius: 24, padding: 20 },
-  codeLabel: { fontSize: 15, color: theme.colors.brand, fontWeight: "700" },
-  codeValue: { fontSize: 34, fontWeight: "800", color: theme.colors.onSurface, letterSpacing: 4, marginVertical: 2 },
-  codeHint: { fontSize: 14, color: theme.colors.onSurfaceSecondary, lineHeight: 19 },
+  avatar: {
+    width: 100, height: 100, borderRadius: 50, borderWidth: 4, borderColor: theme.colors.brandLight,
+    backgroundColor: theme.colors.surfaceTertiary, alignItems: "center", justifyContent: "center",
+  },
+  name: { fontSize: theme.font.xl, fontWeight: "800", color: theme.colors.onSurface, marginTop: 12 },
+  sub: { fontSize: theme.font.base, color: theme.colors.muted },
+  codeCard: { marginHorizontal: 20, marginTop: 20, backgroundColor: theme.colors.brandLight, borderRadius: 24, padding: 20, gap: 12 },
+  codeTop: { flexDirection: "row", alignItems: "center", gap: 12 },
+  codeLabel: { fontSize: theme.font.sm, color: theme.colors.brand, fontWeight: "700" },
+  codeValue: { fontSize: theme.font.xxl, fontWeight: "800", color: theme.colors.onSurface, letterSpacing: 4, marginVertical: 2 },
+  codeHint: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, lineHeight: 21 },
+  codeBtns: { flexDirection: "row", gap: 10 },
+  shareBtn: {
+    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: theme.colors.brand, borderRadius: theme.radius.pill, paddingVertical: 16, minHeight: 56,
+  },
+  shareBtnText: { color: "#fff", fontSize: theme.font.base, fontWeight: "800" },
+  copyBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.pill,
+    paddingVertical: 16, paddingHorizontal: 20, minHeight: 56,
+  },
+  copyBtnText: { color: theme.colors.brand, fontSize: theme.font.base, fontWeight: "800" },
+  emptyCard: {
+    marginHorizontal: 20, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20,
+    padding: 24, alignItems: "center", gap: 8, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  emptyTitle: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  callRelation: { fontSize: theme.font.xs, color: theme.colors.muted },
+  sizeRow: { flexDirection: "row", gap: 10, paddingBottom: 16 },
+  sizeBtn: {
+    flex: 1, alignItems: "center", justifyContent: "center", gap: 2, paddingVertical: 12, minHeight: 72,
+    borderRadius: theme.radius.md, borderWidth: 2, borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  sizeBtnOn: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
+  sizeBtnSample: { fontWeight: "800", color: theme.colors.onSurface },
+  sizeBtnText: { fontSize: theme.font.xs, fontWeight: "700", color: theme.colors.muted },
+  sizeBtnTextOn: { color: theme.colors.brand },
   okay: { flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigold, borderRadius: 24, padding: 20 },
   okayIcon: { width: 54, height: 54, borderRadius: 27, backgroundColor: "rgba(0,0,0,0.15)", alignItems: "center", justifyContent: "center" },
   okayTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onMarigold },

@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { View, Text, StyleSheet, Pressable, Platform, ScrollView, TextInput } from "react-native";
+import { View, StyleSheet, Pressable, Platform, ScrollView, TextInput } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -64,13 +65,13 @@ export default function ElderLogin() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="elder-back">
           <Ionicons name="chevron-back" size={30} color={theme.colors.onSurface} />
         </Pressable>
-        <Text style={styles.headerTitle}>{mode === "login" ? "Welcome back" : "Create account"}</Text>
+        <AppText style={styles.headerTitle}>{mode === "login" ? "Welcome back" : "Create account"}</AppText>
         <View style={{ width: 44 }} />
       </View>
 
       {step === "name" ? (
         <ScrollView contentContainerStyle={styles.nameWrap} keyboardShouldPersistTaps="handled">
-          <Text style={styles.bigLabel}>What is your name?</Text>
+          <AppText style={styles.bigLabel}>What is your name?</AppText>
           <TextField value={name} onChangeText={setName} placeholder="e.g. Kamala" testID="elder-name-input" />
           <Pressable
             style={[styles.primaryBtn, !name.trim() && styles.btnDisabled]}
@@ -78,20 +79,20 @@ export default function ElderLogin() {
             onPress={() => setStep("phone")}
             testID="elder-name-next"
           >
-            <Text style={styles.primaryBtnText}>Continue</Text>
+            <AppText style={styles.primaryBtnText}>Continue</AppText>
           </Pressable>
           <Pressable onPress={switchMode} style={styles.switchLink}>
-            <Text style={styles.switchText}>Already have an account? <Text style={styles.switchBold}>Log in</Text></Text>
+            <AppText style={styles.switchText}>Already have an account? <AppText style={styles.switchBold}>Log in</AppText></AppText>
           </Pressable>
         </ScrollView>
       ) : (
         <View style={styles.padArea}>
-          <Text style={styles.bigLabel}>
+          <AppText style={styles.bigLabel}>
             {step === "phone" ? "Enter your phone number" : "Enter your 4-digit PIN"}
-          </Text>
+          </AppText>
 
           {step === "phone" ? (
-            <Text style={styles.phoneDisplay} testID="phone-display">{phone || "\u00A0"}</Text>
+            <AppText style={styles.phoneDisplay} testID="phone-display">{phone || "\u00A0"}</AppText>
           ) : (
             <View style={styles.pinDots}>
               {[0, 1, 2, 3].map((i) => (
@@ -100,14 +101,14 @@ export default function ElderLogin() {
             </View>
           )}
 
-          {error ? <Text style={styles.error} testID="elder-error">{error}</Text> : <View style={{ height: 24 }} />}
+          {error ? <AppText style={styles.error} testID="elder-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : <View style={{ height: 24 }} />}
 
           <Keypad onPress={press} onBack={back} />
 
           <View style={styles.actionRow}>
             {step === "pin" && (
               <Pressable onPress={() => { setStep("phone"); setPin(""); }} style={styles.secondaryBtn}>
-                <Text style={styles.secondaryBtnText}>Back</Text>
+                <AppText style={styles.secondaryBtnText}>Back</AppText>
               </Pressable>
             )}
             <Pressable
@@ -120,18 +121,18 @@ export default function ElderLogin() {
               onPress={() => (step === "phone" ? setStep("pin") : submit())}
               testID="elder-submit"
             >
-              <Text style={styles.primaryBtnText}>
+              <AppText style={styles.primaryBtnText}>
                 {busy ? "Please wait..." : step === "phone" ? "Continue" : mode === "login" ? "Log in" : "Create account"}
-              </Text>
+              </AppText>
             </Pressable>
           </View>
 
           {step === "phone" && (
             <Pressable onPress={switchMode} style={styles.switchLink}>
-              <Text style={styles.switchText}>
+              <AppText style={styles.switchText}>
                 {mode === "login" ? "New here? " : "Have an account? "}
-                <Text style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</Text>
-              </Text>
+                <AppText style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</AppText>
+              </AppText>
             </Pressable>
           )}
         </View>
@@ -148,13 +149,27 @@ function Keypad({ onPress, onBack }: { onPress: (d: string) => void; onBack: () 
         if (k === "") return <View key={i} style={styles.key} />;
         if (k === "back")
           return (
-            <Pressable key={i} style={styles.key} onPress={onBack} testID="key-back">
+            <Pressable
+              key={i}
+              style={styles.key}
+              onPress={onBack}
+              testID="key-back"
+              accessibilityRole="button"
+              accessibilityLabel="Delete last digit"
+            >
               <Ionicons name="backspace-outline" size={34} color={theme.colors.onSurface} />
             </Pressable>
           );
         return (
-          <Pressable key={i} style={styles.key} onPress={() => onPress(k)} testID={`key-${k}`}>
-            <Text style={styles.keyText}>{k}</Text>
+          <Pressable
+            key={i}
+            style={styles.key}
+            onPress={() => onPress(k)}
+            testID={`key-${k}`}
+            accessibilityRole="button"
+            accessibilityLabel={k}
+          >
+            <AppText style={styles.keyText}>{k}</AppText>
           </Pressable>
         );
       })}

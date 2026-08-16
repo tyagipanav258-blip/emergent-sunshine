@@ -1,5 +1,6 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, StyleSheet } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/theme";
 
@@ -21,10 +22,10 @@ export function Logo({ size = 64, subtitle }: { size?: number; subtitle?: string
     <View style={styles.row}>
       <LogoMark size={size} />
       <View>
-        <Text style={styles.wordmark}>
-          Sun<Text style={{ color: theme.colors.marigoldDark }}>shine</Text>
-        </Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        <AppText style={styles.wordmark}>
+          Sun<AppText style={{ color: theme.colors.marigoldDark }}>shine</AppText>
+        </AppText>
+        {subtitle ? <AppText style={styles.subtitle}>{subtitle}</AppText> : null}
       </View>
     </View>
   );

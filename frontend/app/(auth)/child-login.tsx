@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { View, Text, StyleSheet, Pressable, TextInput, Platform } from "react-native";
+import { useEffect, useState } from "react";
+import { View, StyleSheet, Pressable, TextInput, Platform } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
@@ -13,13 +14,23 @@ export default function ChildLogin() {
   const insets = useSafeAreaInsets();
   const { signInChild, signUpChild } = useAuth();
 
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  // An invite link carries the family code, so nobody has to read six
+  // characters down a phone line.
+  const { code } = useLocalSearchParams<{ code?: string }>();
+  const [mode, setMode] = useState<"login" | "signup">(code ? "signup" : "login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [familyCode, setFamilyCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (code) {
+      setFamilyCode(code.toUpperCase());
+      setMode("signup");
+    }
+  }, [code]);
 
   const submit = async () => {
     if (Platform.OS !== "web") Haptics.selectionAsync();
@@ -45,7 +56,7 @@ export default function ChildLogin() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="child-back">
           <Ionicons name="chevron-back" size={30} color={theme.colors.onSurface} />
         </Pressable>
-        <Text style={styles.headerTitle}>Family member</Text>
+        <AppText style={styles.headerTitle}>Family member</AppText>
         <View style={{ width: 44 }} />
       </View>
 
@@ -53,10 +64,10 @@ export default function ChildLogin() {
         <View style={styles.iconWrap}>
           <Ionicons name="people" size={40} color={theme.colors.brand} />
         </View>
-        <Text style={styles.title}>{mode === "login" ? "Welcome back" : "Create your account"}</Text>
-        <Text style={styles.subtitle}>
+        <AppText style={styles.title}>{mode === "login" ? "Welcome back" : "Create your account"}</AppText>
+        <AppText style={styles.subtitle}>
           {mode === "login" ? "Log in to care for your parent" : "Enter your parent's family code to connect"}
-        </Text>
+        </AppText>
 
         {mode === "signup" && (
           <Field label="Your name" value={name} onChangeText={setName} placeholder="e.g. Priya" testID="child-name" />
@@ -67,17 +78,24 @@ export default function ChildLogin() {
           <Field label="Family code" value={familyCode} onChangeText={(t: string) => setFamilyCode(t.toUpperCase())} placeholder="From your parent's profile" autoCapitalize="characters" testID="child-family-code" />
         )}
 
-        {error ? <Text style={styles.error} testID="child-error">{error}</Text> : null}
+        {error ? <AppText style={styles.error} testID="child-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : null}
 
-        <Pressable style={[styles.primaryBtn, (!canSubmit || busy) && styles.btnDisabled]} disabled={!canSubmit || busy} onPress={submit} testID="child-submit">
-          <Text style={styles.primaryBtnText}>{busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}</Text>
+        <Pressable
+          style={[styles.primaryBtn, (!canSubmit || busy) && styles.btnDisabled]}
+          disabled={!canSubmit || busy}
+          onPress={submit}
+          testID="child-submit"
+          accessibilityRole="button"
+          accessibilityLabel={mode === "login" ? "Log in" : "Create account"}
+        >
+          <AppText style={styles.primaryBtnText}>{busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}</AppText>
         </Pressable>
 
         <Pressable onPress={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }} style={styles.switchLink} testID="child-switch-mode">
-          <Text style={styles.switchText}>
+          <AppText style={styles.switchText}>
             {mode === "login" ? "New here? " : "Have an account? "}
-            <Text style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</Text>
-          </Text>
+            <AppText style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</AppText>
+          </AppText>
         </Pressable>
       </KeyboardAwareScrollView>
     </View>
@@ -87,7 +105,7 @@ export default function ChildLogin() {
 function Field({ label, testID, ...props }: any) {
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <AppText style={styles.fieldLabel}>{label}</AppText>
       <TextInput style={styles.input} placeholderTextColor={theme.colors.muted} testID={testID} {...props} />
     </View>
   );

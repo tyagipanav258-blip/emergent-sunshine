@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import {
-  View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Platform, Linking,
-} from "react-native";
+import { View, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Platform, Linking } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -73,7 +72,8 @@ export default function AssistantScreen() {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
-      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      // Web already returned above, so this path is always a native platform.
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setRecording(true);
       setStatus("Listening... tap again when you're done");
     } catch {
@@ -128,8 +128,8 @@ export default function AssistantScreen() {
         <View style={styles.hCenter}>
           <View style={styles.hSun}><Ionicons name="sunny" size={22} color="#fff" /></View>
           <View>
-            <Text style={styles.hTitle}>Ask Sunshine</Text>
-            <Text style={styles.hSub}>Just talk to me</Text>
+            <AppText style={styles.hTitle}>Ask Sunshine</AppText>
+            <AppText style={styles.hSub}>Just talk to me</AppText>
           </View>
         </View>
         <View style={{ width: 44 }} />
@@ -138,12 +138,12 @@ export default function AssistantScreen() {
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : "translate-with-padding"}>
         {messages.length === 0 ? (
           <View style={styles.hero}>
-            <Text style={styles.heroTitle}>Hello, Kamala!</Text>
-            <Text style={styles.heroText}>I can call your family, send messages, mark medicines, order refills, book a doctor and more. Just tell me.</Text>
+            <AppText style={styles.heroTitle}>Hello, Kamala!</AppText>
+            <AppText style={styles.heroText}>I can call your family, send messages, mark medicines, order refills, book a doctor and more. Just tell me.</AppText>
             <View style={styles.chips}>
               {EXAMPLES.map((e) => (
                 <Pressable key={e} style={styles.chip} onPress={() => sendText(e)} testID={`assistant-example-${e}`}>
-                  <Text style={styles.chipText}>{e}</Text>
+                  <AppText style={styles.chipText}>{e}</AppText>
                 </Pressable>
               ))}
             </View>
@@ -160,7 +160,7 @@ export default function AssistantScreen() {
             ListFooterComponent={typing ? (
               <View style={[styles.bubble, styles.bubbleA, styles.typing]}>
                 <ActivityIndicator size="small" color={theme.colors.brand} />
-                <Text style={styles.typingText}>Sunshine is thinking...</Text>
+                <AppText style={styles.typingText}>Sunshine is thinking...</AppText>
               </View>
             ) : null}
           />
@@ -168,7 +168,7 @@ export default function AssistantScreen() {
 
         {/* Mic zone */}
         <View style={[styles.micZone, { paddingBottom: insets.bottom > 0 ? insets.bottom + 8 : 16 }]}>
-          <Text style={styles.status}>{status}</Text>
+          <AppText style={styles.status}>{status}</AppText>
           <Pressable
             style={[styles.mic, recording && styles.micRec, busy && !recording && styles.micBusy]}
             onPress={micPress}
@@ -184,13 +184,13 @@ export default function AssistantScreen() {
 
           {status.includes("Settings") && (
             <Pressable style={styles.settingsBtn} onPress={() => Linking.openSettings()} testID="assistant-settings">
-              <Text style={styles.settingsText}>Open Settings</Text>
+              <AppText style={styles.settingsText}>Open Settings</AppText>
             </Pressable>
           )}
 
           {!showType ? (
             <Pressable onPress={() => setShowType(true)} testID="assistant-show-type">
-              <Text style={styles.typeToggle}>or type instead</Text>
+              <AppText style={styles.typeToggle}>or type instead</AppText>
             </Pressable>
           ) : (
             <View style={styles.inputRow}>
@@ -213,19 +213,19 @@ function Bubble({ msg, onAction }: { msg: Msg; onAction: () => void }) {
       <View style={[styles.row, isUser ? styles.rowR : styles.rowL]}>
         {!isUser && <View style={styles.av}><Ionicons name="sunny" size={16} color="#fff" /></View>}
         <View style={[styles.bubble, isUser ? styles.bubbleU : styles.bubbleA]}>
-          <Text style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</Text>
+          <AppText style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</AppText>
         </View>
       </View>
       {msg.executed && (
         <View style={styles.done}>
           <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
-          <Text style={styles.doneText}>{msg.executed}</Text>
+          <AppText style={styles.doneText}>{msg.executed}</AppText>
         </View>
       )}
       {msg.action?.type === "call" && (
         <Pressable style={styles.actionCard} onPress={onAction} testID="assistant-call-action">
           <View style={styles.actionIcon}><Ionicons name="call" size={22} color="#fff" /></View>
-          <Text style={styles.actionText}>Call {msg.action.target_name}</Text>
+          <AppText style={styles.actionText}>Call {msg.action.target_name}</AppText>
           <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
         </Pressable>
       )}

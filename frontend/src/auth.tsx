@@ -11,6 +11,8 @@ export type User = {
   elder_id?: string;
   elder_name?: string;
   location?: string;
+  timezone?: string;
+  relation?: string;
 };
 
 type AuthState = {
@@ -61,7 +63,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await afterAuth(res);
   };
   const signUpElder = async (name: string, phone: string, pin: string) => {
-    const res = await apiFetch<any>("/auth/elder/signup", { method: "POST", auth: false, body: { name, phone, pin } });
+    // Schedules, greetings and the day boundary are computed in this zone, so
+    // a dose due at 8 AM is judged against the elder's clock, not the server's.
+    let timezone: string | undefined;
+    try {
+      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      timezone = undefined;
+    }
+    const res = await apiFetch<any>("/auth/elder/signup", {
+      method: "POST", auth: false, body: { name, phone, pin, timezone },
+    });
     await afterAuth(res);
   };
   const signInChild = async (email: string, password: string) => {

@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, RefreshControl } from "react-native";
+import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, RefreshControl } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -48,14 +49,14 @@ export default function ChildTasks() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="child-tasks">
-      <Text style={styles.title}>Concierge Tasks</Text>
-      <Text style={styles.subtitle}>Requests from your parent to review and arrange.</Text>
+      <AppText style={styles.title}>Concierge Tasks</AppText>
+      <AppText style={styles.subtitle}>Requests from your parent to review and arrange.</AppText>
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.brand} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ paddingBottom: 120, paddingTop: 8 }} showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={theme.colors.brand} />}>
-          {tasks.length === 0 && <Text style={styles.empty}>No requests yet. When your parent asks Sunshine to arrange something, it will appear here.</Text>}
+          {tasks.length === 0 && <AppText style={styles.empty}>No requests yet. When your parent asks Sunshine to arrange something, it will appear here.</AppText>}
 
           {pending.map((t) => {
             const m = STATUS_META[t.status];
@@ -65,12 +66,12 @@ export default function ChildTasks() {
                 <View style={styles.cardTop}>
                   <View style={styles.kindIcon}><Ionicons name={KIND_ICON[t.kind] || "sparkles"} size={22} color={theme.colors.brand} /></View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle}>{t.title}</Text>
-                    {t.auto && <Text style={styles.autoTag}>Auto-detected from low medicine</Text>}
+                    <AppText style={styles.cardTitle}>{t.title}</AppText>
+                    {t.auto && <AppText style={styles.autoTag}>Auto-detected from low medicine</AppText>}
                   </View>
-                  <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}><Text style={[styles.statusText, { color: m.color }]}>{m.label}</Text></View>
+                  <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}><AppText style={[styles.statusText, { color: m.color }]}>{m.label}</AppText></View>
                 </View>
-                <Text style={styles.cardDetail}>{t.detail}</Text>
+                <AppText style={styles.cardDetail}>{t.detail}</AppText>
 
                 {/* progress */}
                 <View style={styles.steps}>
@@ -85,22 +86,22 @@ export default function ChildTasks() {
                 <View style={styles.actions}>
                   {t.status === "requested" && (
                     <>
-                      <Pressable style={[styles.actionBtn, styles.approve]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "approved")} testID={`approve-${t.id}`}>
-                        <Text style={styles.approveText}>{busyId === t.id ? "..." : "Approve & arrange"}</Text>
+                      <Pressable style={[styles.actionBtn, styles.approve]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "approved")} testID={`approve-${t.id}`} accessibilityRole="button" accessibilityLabel={`Approve and arrange: ${t.title}`}>
+                        <AppText style={styles.approveText}>{busyId === t.id ? "..." : "Approve & arrange"}</AppText>
                       </Pressable>
-                      <Pressable style={[styles.actionBtn, styles.decline]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "declined")} testID={`decline-${t.id}`}>
-                        <Text style={styles.declineText}>Decline</Text>
+                      <Pressable style={[styles.actionBtn, styles.decline]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "declined")} testID={`decline-${t.id}`} accessibilityRole="button" accessibilityLabel={`Decline: ${t.title}`}>
+                        <AppText style={styles.declineText}>Decline</AppText>
                       </Pressable>
                     </>
                   )}
                   {t.status === "approved" && (
-                    <Pressable style={[styles.actionBtn, styles.approve, { flex: 1 }]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "in_progress")} testID={`progress-${t.id}`}>
-                      <Text style={styles.approveText}>Mark in progress</Text>
+                    <Pressable style={[styles.actionBtn, styles.approve, { flex: 1 }]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "in_progress")} testID={`progress-${t.id}`} accessibilityRole="button" accessibilityLabel={`Mark in progress: ${t.title}`}>
+                      <AppText style={styles.approveText}>Mark in progress</AppText>
                     </Pressable>
                   )}
                   {t.status === "in_progress" && (
-                    <Pressable style={[styles.actionBtn, styles.done, { flex: 1 }]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "done")} testID={`done-${t.id}`}>
-                      <Text style={styles.approveText}>Mark as done</Text>
+                    <Pressable style={[styles.actionBtn, styles.done, { flex: 1 }]} disabled={busyId === t.id} onPress={() => setStatus(t.id, "done")} testID={`done-${t.id}`} accessibilityRole="button" accessibilityLabel={`Mark as done: ${t.title}`}>
+                      <AppText style={styles.approveText}>Mark as done</AppText>
                     </Pressable>
                   )}
                 </View>
@@ -108,15 +109,15 @@ export default function ChildTasks() {
             );
           })}
 
-          {doneTasks.length > 0 && <Text style={styles.section}>Completed</Text>}
+          {doneTasks.length > 0 && <AppText style={styles.section}>Completed</AppText>}
           {doneTasks.map((t) => {
             const m = STATUS_META[t.status];
             return (
               <View key={t.id} style={[styles.card, { opacity: 0.7 }]}>
                 <View style={styles.cardTop}>
                   <View style={styles.kindIcon}><Ionicons name={KIND_ICON[t.kind] || "sparkles"} size={22} color={theme.colors.muted} /></View>
-                  <Text style={[styles.cardTitle, { flex: 1 }]}>{t.title}</Text>
-                  <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}><Text style={[styles.statusText, { color: m.color }]}>{m.label}</Text></View>
+                  <AppText style={[styles.cardTitle, { flex: 1 }]}>{t.title}</AppText>
+                  <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}><AppText style={[styles.statusText, { color: m.color }]}>{m.label}</AppText></View>
                 </View>
               </View>
             );

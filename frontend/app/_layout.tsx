@@ -9,6 +9,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
+import { TextScaleProvider } from "@/src/text-scale";
 import { theme } from "@/src/theme";
 
 LogBox.ignoreAllLogs(true);
@@ -22,7 +23,9 @@ function RootNavigator() {
   useEffect(() => {
     if (loading) return;
     const seg0 = segments[0];
-    const inAuth = seg0 === "(auth)";
+    // `join` is the invite deep link; a signed-out visitor must reach it with
+    // the family code intact rather than being bounced to the role picker.
+    const inAuth = seg0 === "(auth)" || seg0 === "join";
     if (!user && !inAuth) {
       router.replace("/(auth)/role");
     } else if (user && (inAuth || seg0 === undefined)) {
@@ -45,6 +48,7 @@ function RootNavigator() {
   return (
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="index" />
+      <Stack.Screen name="join" />
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(elder)" />
       <Stack.Screen name="(child)" />
@@ -69,9 +73,11 @@ export default function RootLayout() {
         <SafeAreaProvider>
           <BottomSheetModalProvider>
             <StatusBar barStyle="dark-content" />
-            <AuthProvider>
-              <RootNavigator />
-            </AuthProvider>
+            <TextScaleProvider>
+              <AuthProvider>
+                <RootNavigator />
+              </AuthProvider>
+            </TextScaleProvider>
           </BottomSheetModalProvider>
         </SafeAreaProvider>
       </KeyboardProvider>

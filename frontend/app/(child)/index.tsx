@@ -1,10 +1,11 @@
 import { useCallback, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
+import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { apiFetch, getToken } from "@/src/api";
+import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { theme, API } from "@/src/theme";
 
@@ -39,9 +40,9 @@ export default function ChildDashboard() {
       const [a, pres, t] = await Promise.all([
         apiFetch<Analytics>("/child/analytics"),
         apiFetch<any[]>("/prescriptions").catch(() => []),
-        getToken(),
+        apiFetch<{ token: string }>("/prescriptions/image-token").catch(() => ({ token: "" })),
       ]);
-      setData(a); setPrescriptions(pres); setTkn(t);
+      setData(a); setPrescriptions(pres); setTkn(t.token);
     } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
@@ -56,32 +57,36 @@ export default function ChildDashboard() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={theme.colors.brand} />}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.hi}>Hi {user?.name?.split(" ")[0]},</Text>
-            <Text style={styles.headerTitle}>How is {data?.elder_name?.split(" ")[0]}?</Text>
+            <AppText style={styles.hi}>Hi {user?.name?.split(" ")[0]},</AppText>
+            <AppText style={styles.headerTitle}>How is {data?.elder_name?.split(" ")[0]}?</AppText>
           </View>
-          <Image source={{ uri: "https://images.unsplash.com/photo-1590905707155-17c680dd7867?w=200&q=80" }} style={styles.avatar} />
+          <View style={styles.avatar} accessible accessibilityLabel={`${data?.elder_name || "Your parent"}'s profile`}>
+            <Ionicons name="person" size={26} color={theme.colors.brand} />
+          </View>
         </View>
 
         {/* Status banner */}
         <View style={styles.banner} testID="last-active">
           <View style={styles.pulse}><Ionicons name="pulse" size={26} color={theme.colors.success} /></View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.bannerTitle}>Last active {timeAgo(data?.last_active || null)}</Text>
-            <Text style={styles.bannerSub}><Ionicons name="location" size={14} color={theme.colors.muted} /> {data?.location}</Text>
+            <AppText style={styles.bannerTitle}>Last active {timeAgo(data?.last_active || null)}</AppText>
+            <AppText style={styles.bannerSub}><Ionicons name="location" size={14} color={theme.colors.muted} /> {data?.location}</AppText>
           </View>
         </View>
 
-        {/* Missed-dose alerts */}
+        {/* Alerts — SOS first, then missed doses */}
         {data?.alerts && data.alerts.length > 0 && (
-          <View style={styles.alertsBox} testID="missed-alerts">
+          <View style={styles.alertsBox} testID="missed-alerts" accessibilityLiveRegion="polite">
             <View style={styles.alertsHead}>
               <Ionicons name="notifications" size={20} color={theme.colors.error} />
-              <Text style={styles.alertsTitle}>Missed-dose alerts</Text>
+              <AppText style={styles.alertsTitle}>
+                {data.alerts.some((a) => a.kind === "sos") ? "Needs your attention" : "Missed-dose alerts"}
+              </AppText>
             </View>
             {data.alerts.slice(0, 4).map((a, i) => (
               <View key={i} style={styles.alertRow}>
-                <View style={styles.alertDot} />
-                <Text style={styles.alertText}>{a.message}</Text>
+                <View style={[styles.alertDot, a.kind === "sos" && styles.alertDotUrgent]} />
+                <AppText style={[styles.alertText, a.kind === "sos" && styles.alertTextUrgent]}>{a.message}</AppText>
               </View>
             ))}
           </View>
@@ -89,46 +94,52 @@ export default function ChildDashboard() {
 
         {/* Stat grid */}
         <View style={styles.grid}>
-          <Stat icon="flame" label="Most used" value={data?.most_used_feature || "—"} color={theme.colors.marigoldDark} />
+          <Stat icon="flame" label="Most used" value={data?.most_used_feature || "No activity yet"} color={theme.colors.marigoldDark} />
           <Stat icon="medkit" label="Low stock" value={`${data?.low_stock_count || 0} med`} color={data?.low_stock_count ? theme.colors.error : theme.colors.success} />
           <Stat icon="calendar" label="Appointments" value={`${data?.appointments.length || 0} upcoming`} color={theme.colors.brand} />
-          <Pressable style={styles.statCard} onPress={() => router.push("/(child)/tasks")} testID="pending-tasks-card">
+          <Pressable
+            style={styles.statCard}
+            onPress={() => router.push("/(child)/tasks")}
+            testID="pending-tasks-card"
+            accessibilityRole="button"
+            accessibilityLabel={`${data?.pending_tasks || 0} requests to review`}
+          >
             <View style={[styles.statIcon, { backgroundColor: theme.colors.marigoldLight }]}><Ionicons name="hourglass" size={24} color={theme.colors.marigoldDark} /></View>
-            <Text style={styles.statValue}>{data?.pending_tasks || 0} pending</Text>
-            <Text style={styles.statLabel}>Requests to review</Text>
+            <AppText style={styles.statValue}>{data?.pending_tasks || 0} pending</AppText>
+            <AppText style={styles.statLabel}>Requests to review</AppText>
           </Pressable>
         </View>
 
         {/* Medicine stock */}
-        <Text style={styles.section}>Medicine Stock</Text>
+        <AppText style={styles.section}>Medicine Stock</AppText>
         <View style={{ gap: 12, paddingHorizontal: 20 }}>
           {data?.medicines.map((m) => (
             <View key={m.id} style={styles.medRow} testID={`stock-${m.id}`}>
               <Image source={{ uri: m.image }} style={styles.medImg} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.medName}>{m.name}</Text>
-                <Text style={styles.medMeta}>{m.dose} • {m.time}</Text>
+                <AppText style={styles.medName}>{m.name}</AppText>
+                <AppText style={styles.medMeta}>{m.dose} • {m.time}</AppText>
               </View>
               <View style={[styles.stockBadge, { backgroundColor: (m.low ? theme.colors.error : theme.colors.success) + "22" }]}>
-                <Text style={[styles.stockBadgeText, { color: m.low ? theme.colors.error : theme.colors.success }]}>
+                <AppText style={[styles.stockBadgeText, { color: m.low ? theme.colors.error : theme.colors.success }]}>
                   {m.low ? `Low: ${m.days_left}d` : `${m.stock} left`}
-                </Text>
+                </AppText>
               </View>
             </View>
           ))}
         </View>
 
         {/* Appointments */}
-        <Text style={styles.section}>Appointments</Text>
+        <AppText style={styles.section}>Appointments</AppText>
         <View style={{ gap: 12, paddingHorizontal: 20 }}>
           {data?.appointments.map((a) => (
             <View key={a.id} style={styles.apptRow}>
               <View style={styles.apptIcon}><Ionicons name="calendar" size={22} color={theme.colors.brand} /></View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.medName}>{a.doctor} — {a.specialty}</Text>
-                <Text style={styles.medMeta}>{a.date} • {a.time} • {a.place}</Text>
+                <AppText style={styles.medName}>{a.doctor} — {a.specialty}</AppText>
+                <AppText style={styles.medMeta}>{a.date} • {a.time} • {a.place}</AppText>
               </View>
-              <View style={styles.confirmedPill}><Text style={styles.confirmedText}>Confirmed</Text></View>
+              <View style={styles.confirmedPill}><AppText style={styles.confirmedText}>Confirmed</AppText></View>
             </View>
           ))}
         </View>
@@ -136,7 +147,7 @@ export default function ChildDashboard() {
         {/* Prescriptions */}
         {prescriptions.length > 0 && (
           <>
-            <Text style={styles.section}>Prescriptions</Text>
+            <AppText style={styles.section}>Prescriptions</AppText>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }}>
               {prescriptions.map((p) => {
                 const url = `${API}/prescriptions/${p.id}/image?token=${token}`;
@@ -145,7 +156,7 @@ export default function ChildDashboard() {
                     <Image source={{ uri: url }} style={styles.presImg} contentFit="cover" />
                     <View style={styles.presMeta}>
                       <Ionicons name="document-text" size={14} color={theme.colors.brand} />
-                      <Text style={styles.presMetaText}>{p.medicines?.length || 0} med(s)</Text>
+                      <AppText style={styles.presMetaText}>{p.medicines?.length || 0} med(s)</AppText>
                     </View>
                   </Pressable>
                 );
@@ -154,16 +165,29 @@ export default function ChildDashboard() {
           </>
         )}
 
-        <Pressable style={styles.callParent} onPress={() => router.push({ pathname: "/call", params: { name: data?.elder_name || "Parent", who: "daughter" } })} testID="call-parent">
+        <Pressable
+          style={styles.callParent}
+          onPress={() => router.push({ pathname: "/call", params: { name: data?.elder_name || "Parent", who: "parent" } })}
+          testID="call-parent"
+          accessibilityRole="button"
+          accessibilityLabel={`Video call ${data?.elder_name || "your parent"}`}
+        >
           <Ionicons name="videocam" size={22} color="#fff" />
-          <Text style={styles.callParentText}>Video call {data?.elder_name?.split(" ")[0]}</Text>
+          <AppText style={styles.callParentText}>Video call {data?.elder_name?.split(" ")[0]}</AppText>
         </Pressable>
       </ScrollView>
 
       {viewer && (
         <View style={styles.viewer} testID="prescription-viewer">
           <Image source={{ uri: viewer }} style={styles.viewerImg} contentFit="contain" />
-          <Pressable style={[styles.viewerClose, { top: insets.top + 12 }]} onPress={() => setViewer(null)} testID="viewer-close" hitSlop={12}>
+          <Pressable
+            style={[styles.viewerClose, { top: insets.top + 12 }]}
+            onPress={() => setViewer(null)}
+            testID="viewer-close"
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Close prescription photo"
+          >
             <Ionicons name="close" size={32} color="#fff" />
           </Pressable>
         </View>
@@ -176,8 +200,8 @@ function Stat({ icon, label, value, color }: any) {
   return (
     <View style={styles.statCard}>
       <View style={[styles.statIcon, { backgroundColor: color + "22" }]}><Ionicons name={icon} size={24} color={color} /></View>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <AppText style={styles.statValue}>{value}</AppText>
+      <AppText style={styles.statLabel}>{label}</AppText>
     </View>
   );
 }
@@ -188,7 +212,10 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
   hi: { fontSize: 16, color: theme.colors.muted, fontWeight: "600" },
   headerTitle: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface },
-  avatar: { width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: theme.colors.brandLight },
+  avatar: {
+    width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: theme.colors.brandLight,
+    backgroundColor: theme.colors.surfaceTertiary, alignItems: "center", justifyContent: "center",
+  },
   banner: { flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, backgroundColor: theme.colors.brandLight, borderRadius: 20, padding: 18 },
   pulse: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
   bannerTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.onSurface },
@@ -217,6 +244,8 @@ const styles = StyleSheet.create({
   alertRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   alertDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.error },
   alertText: { fontSize: 15, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+  alertDotUrgent: { width: 9, height: 9, borderRadius: 5 },
+  alertTextUrgent: { fontWeight: "800", color: theme.colors.error },
   presCard: { width: 120, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border },
   presImg: { width: 120, height: 130, backgroundColor: theme.colors.surfaceTertiary },
   presMeta: { flexDirection: "row", alignItems: "center", gap: 6, padding: 10 },

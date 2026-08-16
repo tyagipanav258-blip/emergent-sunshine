@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Pressable, Platform, Linking } from "react-native";
+import { View, StyleSheet, Pressable, Platform, Linking } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -53,18 +54,30 @@ export default function CallScreen() {
         <View style={styles.bigAvatarWrap}>
           <Image source={{ uri: AVATARS[String(who)] || AVATARS.daughter }} style={styles.bigAvatar} contentFit="cover" />
         </View>
-        <Text style={styles.name}>{name}</Text>
-        <Text style={styles.status}>{phase === "connecting" ? "Connecting..." : `Video call • ${fmt(seconds)}`}</Text>
+        <AppText style={styles.name}>{name}</AppText>
+        <AppText style={styles.status}>{phase === "connecting" ? "Connecting..." : `Video call • ${fmt(seconds)}`}</AppText>
       </View>
 
       <View style={[styles.controls, { paddingBottom: insets.bottom + 32 }]}>
-        <Pressable style={styles.phoneRow} onPress={phoneCall} testID="phone-call">
+        <Pressable
+          style={styles.phoneRow}
+          onPress={phoneCall}
+          testID="phone-call"
+          accessibilityRole="button"
+          accessibilityLabel="Switch to a normal phone call"
+        >
           <Ionicons name="call" size={20} color="#fff" />
-          <Text style={styles.phoneText}>Switch to phone call</Text>
+          <AppText style={styles.phoneText}>Switch to phone call</AppText>
         </Pressable>
         <View style={styles.btnRow}>
           <CtrlBtn icon={muted ? "mic-off" : "mic"} label={muted ? "Unmute" : "Mute"} active={muted} onPress={() => setMuted(!muted)} testID="call-mute" />
-          <Pressable style={[styles.ctrl, styles.endBtn]} onPress={end} testID="call-end">
+          <Pressable
+            style={[styles.ctrl, styles.endBtn]}
+            onPress={end}
+            testID="call-end"
+            accessibilityRole="button"
+            accessibilityLabel="End call"
+          >
             <Ionicons name="call" size={36} color="#fff" style={{ transform: [{ rotate: "135deg" }] }} />
           </Pressable>
           <CtrlBtn icon={video ? "videocam" : "videocam-off"} label={video ? "Video" : "Video off"} active={!video} onPress={() => setVideo(!video)} testID="call-video" />
@@ -76,11 +89,17 @@ export default function CallScreen() {
 
 function CtrlBtn({ icon, label, active, onPress, testID }: any) {
   return (
-    <Pressable style={styles.ctrlWrap} onPress={onPress} testID={testID}>
+    <Pressable
+      style={styles.ctrlWrap}
+      onPress={onPress}
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
       <View style={[styles.ctrl, active && styles.ctrlActive]}>
         <Ionicons name={icon} size={30} color={active ? theme.colors.onSurface : "#fff"} />
       </View>
-      <Text style={styles.ctrlLabel}>{label}</Text>
+      <AppText style={styles.ctrlLabel}>{label}</AppText>
     </Pressable>
   );
 }

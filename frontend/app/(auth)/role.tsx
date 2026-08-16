@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
+import { View, StyleSheet, Pressable, Platform } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -19,25 +20,39 @@ export default function RoleChooser() {
     <View style={[styles.root, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 }]} testID="role-chooser">
       <View style={styles.top}>
         <Logo size={84} subtitle="Warmth, family & wellbeing" />
-        <Text style={styles.tagline}>Welcome! Who is using Sunshine?</Text>
+        <AppText style={styles.tagline}>Welcome! Who is using Sunshine?</AppText>
       </View>
 
       <View style={styles.choices}>
-        <Pressable style={[styles.card, styles.cardElder]} onPress={() => go("/(auth)/elder-login")} testID="choose-elder">
+        <Pressable
+          style={[styles.card, styles.cardElder]}
+          onPress={() => go("/(auth)/elder-login")}
+          testID="choose-elder"
+          accessibilityRole="button"
+          accessibilityLabel="I am using this for myself"
+          accessibilityHint="Log in with your phone number and PIN"
+        >
           <View style={[styles.iconWrap, { backgroundColor: theme.colors.marigoldLight }]}>
             <Ionicons name="happy" size={44} color={theme.colors.marigoldDark} />
           </View>
-          <Text style={styles.cardTitle}>I am using this for myself</Text>
-          <Text style={styles.cardSub}>Log in with your phone number and PIN</Text>
+          <AppText style={styles.cardTitle}>I am using this for myself</AppText>
+          <AppText style={styles.cardSub}>Log in with your phone number and PIN</AppText>
           <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
         </Pressable>
 
-        <Pressable style={[styles.card, styles.cardChild]} onPress={() => go("/(auth)/child-login")} testID="choose-child">
+        <Pressable
+          style={[styles.card, styles.cardChild]}
+          onPress={() => go("/(auth)/child-login")}
+          testID="choose-child"
+          accessibilityRole="button"
+          accessibilityLabel="I am a family member"
+          accessibilityHint="Care for your parent with an email login"
+        >
           <View style={[styles.iconWrap, { backgroundColor: theme.colors.brandLight }]}>
             <Ionicons name="people" size={40} color={theme.colors.brand} />
           </View>
-          <Text style={styles.cardTitle}>I am a family member</Text>
-          <Text style={styles.cardSub}>Care for your parent with email login</Text>
+          <AppText style={styles.cardTitle}>I am a family member</AppText>
+          <AppText style={styles.cardSub}>Care for your parent with email login</AppText>
           <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
         </Pressable>
       </View>

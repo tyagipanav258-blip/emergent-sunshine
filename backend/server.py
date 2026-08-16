@@ -5,9 +5,11 @@ import json
 import uuid
 import base64
 import secrets
+import asyncio
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import List, Optional, Literal
 
 import jwt
@@ -23,7 +25,6 @@ from pwdlib import PasswordHash
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
-from emergentintegrations.llm.openai.text_to_speech import OpenAITextToSpeech
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -34,7 +35,20 @@ db = client[os.environ["DB_NAME"]]
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
-JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "43200"))
+# 7 days. A stolen phone shouldn't hand over a health record for a month.
+JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "10080"))
+# Short-lived, purpose-scoped tokens for streamed prescription images.
+IMAGE_TOKEN_MINUTES = 10
+
+# Elders are in India unless they tell us otherwise. Every schedule, greeting and
+# day boundary is computed in the elder's own zone, never the server's.
+DEFAULT_TZ = "Asia/Kolkata"
+EMERGENCY_NUMBER = "112"
+
+# Failed-PIN throttling. A 4-digit PIN is right for this audience; unlimited
+# attempts against a 10,000-key space is not.
+PIN_MAX_ATTEMPTS = 5
+PIN_LOCKOUT_MINUTES = 15
 
 GEMINI = ("gemini", "gemini-3.1-pro-preview")
 OPENAI_MINI = ("openai", "gpt-5.4-mini")
@@ -89,6 +103,8 @@ class ElderSignup(BaseModel):
     name: str
     phone: str
     pin: str = Field(min_length=4, max_length=4)
+    location: Optional[str] = None
+    timezone: Optional[str] = None
 
 class ElderLogin(BaseModel):
     phone: str
@@ -99,6 +115,7 @@ class ChildSignup(BaseModel):
     email: str
     password: str = Field(min_length=6)
     family_code: str
+    relation: Optional[str] = None
 
 class ChildLogin(BaseModel):
     email: str
@@ -127,7 +144,8 @@ def public_user(u: dict) -> dict:
         "id": u["id"], "role": u["role"], "name": u.get("name"),
         "phone": u.get("phone"), "email": u.get("email"),
         "family_code": u.get("family_code"), "elder_id": u.get("elder_id"),
-        "location": u.get("location"),
+        "location": u.get("location"), "timezone": u.get("timezone") or DEFAULT_TZ,
+        "relation": u.get("relation"),
     }
 
 
@@ -136,9 +154,12 @@ async def current_user(creds: Optional[HTTPAuthorizationCredentials] = Depends(b
         raise HTTPException(401, "Not authenticated")
     try:
         payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[JWT_ALG])
-        u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
     except Exception:
         raise HTTPException(401, "Invalid token")
+    # Narrow-scope tokens (e.g. prescription images) are not session credentials.
+    if payload.get("scope"):
+        raise HTTPException(403, "This token cannot be used to sign in")
+    u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
     if not u:
         raise HTTPException(401, "User not found")
     return u
@@ -181,30 +202,151 @@ def _parse_time(t: str) -> int:
     return hh * 60 + mm
 
 
-async def _compute_missed(elder_id: str) -> List[dict]:
-    """A dose is missed if its time has passed today and it's not taken.
-    Creates a de-duplicated notification to family (one per med per day)."""
-    now = datetime.now()
-    today = now.strftime("%Y-%m-%d")
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+# ============================ ELDER-LOCAL TIME ============================
+def elder_zone(elder: Optional[dict]) -> ZoneInfo:
+    try:
+        return ZoneInfo((elder or {}).get("timezone") or DEFAULT_TZ)
+    except Exception:
+        return ZoneInfo(DEFAULT_TZ)
+
+
+def elder_now(elder: Optional[dict]) -> datetime:
+    """Wall-clock time where the elder actually lives."""
+    return datetime.now(timezone.utc).astimezone(elder_zone(elder))
+
+
+def elder_day(elder: Optional[dict]) -> str:
+    return elder_now(elder).strftime("%Y-%m-%d")
+
+
+# ============================ DOSE LEDGER ============================
+# Adherence lives in `intakes`, one row per medicine per local day. "Taken today"
+# is derived from it, never stored — so it resets itself at the elder's midnight
+# without a job, and confirming twice is a no-op instead of an undo.
+async def _taken_ids(elder_id: str, day: str) -> set:
+    rows = await db.intakes.find({"elder_id": elder_id, "day": day}, {"_id": 0, "medicine_id": 1}).to_list(500)
+    return {r["medicine_id"] for r in rows}
+
+
+async def _ever_taken_ids(elder_id: str) -> set:
+    rows = await db.intakes.find({"elder_id": elder_id}, {"_id": 0, "medicine_id": 1}).to_list(2000)
+    return {r["medicine_id"] for r in rows}
+
+
+async def _set_intake(elder: dict, med: dict, taken: bool) -> dict:
+    """Idempotently record or withdraw today's dose. Stock moves at most once a day."""
+    eid = med["elder_id"]
+    day = elder_day(elder)
+    existing = await db.intakes.find_one({"elder_id": eid, "medicine_id": med["id"], "day": day})
+    per_day = max(med.get("per_day", 1), 1)
+
+    if taken and not existing:
+        await db.intakes.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": eid, "medicine_id": med["id"], "day": day,
+            "scheduled": med.get("time"), "taken_at": datetime.now(timezone.utc).isoformat(),
+        })
+        await db.medicines.update_one({"id": med["id"]}, {"$set": {"stock": max(med["stock"] - per_day, 0)}})
+    elif not taken and existing:
+        await db.intakes.delete_one({"elder_id": eid, "medicine_id": med["id"], "day": day})
+        await db.medicines.update_one({"id": med["id"]}, {"$set": {"stock": med["stock"] + per_day}})
+
+    return await db.medicines.find_one({"id": med["id"]}, {"_id": 0})
+
+
+async def _compute_missed(elder: dict) -> List[dict]:
+    """Doses whose time has passed today in the elder's own zone and weren't confirmed.
+
+    Read-only. A medicine only becomes alertable once it has been confirmed at
+    least once, so a newly added medicine never fires a false alarm at the family.
+    """
+    eid = elder["id"]
+    now = elder_now(elder)
     now_min = now.hour * 60 + now.minute
-    meds = await db.medicines.find({"elder_id": elder_id}, {"_id": 0}).to_list(100)
+    meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
+    taken = await _taken_ids(eid, elder_day(elder))
+    established = await _ever_taken_ids(eid)
     missed = []
     for m in meds:
-        if m.get("taken_today"):
+        if m["id"] in taken or m["id"] not in established:
             continue
-        due = _parse_time(m["time"])
-        # 30-minute grace after scheduled time
-        if now_min > due + 30:
+        # 30-minute grace after the scheduled time
+        if now_min > _parse_time(m["time"]) + 30:
             missed.append({"id": m["id"], "name": m["name"], "dose": m["dose"], "time": m["time"], "image": m["image"]})
-            existing = await db.notifications.find_one({"elder_id": elder_id, "kind": "missed_dose", "med_id": m["id"], "day": today})
-            if not existing:
-                await db.notifications.insert_one({
-                    "id": str(uuid.uuid4()), "elder_id": elder_id, "kind": "missed_dose", "med_id": m["id"],
-                    "day": today, "to": "family",
-                    "message": f"{m['name']} ({m['time']}) was not marked as taken.",
-                    "at": datetime.now(timezone.utc).isoformat(), "read": False,
-                })
     return missed
+
+
+async def _record_missed_notifications(elder: dict) -> int:
+    """Persist one family notification per missed medicine per local day.
+
+    Called by the background sweep, never by a read handler.
+    """
+    day = elder_day(elder)
+    written = 0
+    for m in await _compute_missed(elder):
+        existing = await db.notifications.find_one(
+            {"elder_id": elder["id"], "kind": "missed_dose", "med_id": m["id"], "day": day}
+        )
+        if existing:
+            continue
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": elder["id"], "kind": "missed_dose", "med_id": m["id"],
+            "day": day, "to": "family",
+            "message": f"{m['name']} ({m['time']}) was not marked as taken.",
+            "at": datetime.now(timezone.utc).isoformat(), "read": False,
+        })
+        written += 1
+    return written
+
+
+async def _missed_dose_sweep(interval_seconds: int = 900):
+    """Background loop so alerts fire on time instead of when someone opens a screen."""
+    while True:
+        try:
+            elders = await db.users.find({"role": "elder"}, {"_id": 0}).to_list(5000)
+            for elder in elders:
+                try:
+                    await _record_missed_notifications(elder)
+                except Exception:
+                    logger.exception("missed-dose sweep failed for %s", elder.get("id"))
+        except Exception:
+            logger.exception("missed-dose sweep failed")
+        await asyncio.sleep(interval_seconds)
+
+
+# ============================ FAMILY GRAPH ============================
+async def _family_contacts(elder_id: str) -> List[dict]:
+    """The people actually registered to this elder. Never a placeholder."""
+    kids = await db.users.find({"role": "child", "elder_id": elder_id}, {"_id": 0}).to_list(50)
+    return [{"id": c["id"], "name": c["name"], "relation": c.get("relation") or "Family", "email": c.get("email")} for c in kids]
+
+
+async def _pin_gate(phone: str) -> None:
+    """Block further PIN attempts once a phone number has failed too many times."""
+    row = await db.pin_attempts.find_one({"phone": phone})
+    if not row:
+        return
+    until = row.get("locked_until")
+    if until and datetime.fromisoformat(until) > datetime.now(timezone.utc):
+        mins = max(int((datetime.fromisoformat(until) - datetime.now(timezone.utc)).total_seconds() // 60) + 1, 1)
+        raise HTTPException(429, f"Too many wrong PINs. Please try again in {plural(mins, 'minute')}.")
+
+
+async def _pin_failed(phone: str) -> None:
+    row = await db.pin_attempts.find_one({"phone": phone})
+    fails = (row or {}).get("fails", 0) + 1
+    update = {"phone": phone, "fails": fails, "last_at": datetime.now(timezone.utc).isoformat()}
+    if fails >= PIN_MAX_ATTEMPTS:
+        update["locked_until"] = (datetime.now(timezone.utc) + timedelta(minutes=PIN_LOCKOUT_MINUTES)).isoformat()
+        update["fails"] = 0
+    await db.pin_attempts.update_one({"phone": phone}, {"$set": update}, upsert=True)
+
+
+async def _pin_ok(phone: str) -> None:
+    await db.pin_attempts.delete_one({"phone": phone})
 
 
 @api.post("/auth/elder/signup")
@@ -217,19 +359,24 @@ async def elder_signup(b: ElderSignup):
     u = {
         "id": str(uuid.uuid4()), "role": "elder", "name": b.name.strip(),
         "phone": phone, "secret_hash": pwd.hash(b.pin),
-        "family_code": new_family_code(), "location": "Bengaluru, Karnataka",
+        "family_code": new_family_code(),
+        "location": (b.location or "").strip() or None,
+        "timezone": (b.timezone or "").strip() or DEFAULT_TZ,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(u.copy())
-    await _seed_elder_data(u["id"])
     return {"access_token": make_token(u["id"], "elder"), "user": public_user(u)}
 
 
 @api.post("/auth/elder/login")
 async def elder_login(b: ElderLogin):
-    u = await db.users.find_one({"role": "elder", "phone": norm_phone(b.phone)})
+    phone = norm_phone(b.phone)
+    await _pin_gate(phone)
+    u = await db.users.find_one({"role": "elder", "phone": phone})
     if not u or not pwd.verify(b.pin, u["secret_hash"]):
+        await _pin_failed(phone)
         raise HTTPException(401, "Wrong phone number or PIN")
+    await _pin_ok(phone)
     return {"access_token": make_token(u["id"], "elder"), "user": public_user(u)}
 
 
@@ -243,9 +390,16 @@ async def child_signup(b: ChildSignup):
     u = {
         "id": str(uuid.uuid4()), "role": "child", "name": b.name.strip(),
         "email": b.email.lower().strip(), "secret_hash": pwd.hash(b.password),
-        "elder_id": elder["id"], "created_at": datetime.now(timezone.utc).isoformat(),
+        "elder_id": elder["id"], "relation": (b.relation or "").strip() or "Family",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(u.copy())
+    # Let the elder see that someone joined, rather than discovering it silently.
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()), "elder_id": elder["id"], "kind": "family_joined", "to": "elder",
+        "message": f"{u['name']} is now connected to your Sunshine account.",
+        "at": datetime.now(timezone.utc).isoformat(), "read": False,
+    })
     return {"access_token": make_token(u["id"], "child"), "user": public_user(u)}
 
 
@@ -267,14 +421,6 @@ async def me(u: dict = Depends(current_user)):
 
 
 # ============================ CONTENT DATA ============================
-FAMILY_STORIES = [
-    {"id": "f1", "name": "Priya", "relation": "Daughter", "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&q=80", "kind": "photo", "preview": "Shared a new photo from Bengaluru", "time": "2h ago", "unseen": True},
-    {"id": "f2", "name": "Rahul", "relation": "Son", "avatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&q=80", "kind": "voice", "preview": "Sent you a voice note", "time": "4h ago", "unseen": True},
-    {"id": "f3", "name": "Aarav", "relation": "Grandson", "avatar": "https://images.unsplash.com/photo-1503919545889-aef636e10ad4?w=300&q=80", "kind": "photo", "preview": "First day of school!", "time": "Yesterday", "unseen": False},
-    {"id": "f4", "name": "Anaya", "relation": "Granddaughter", "avatar": "https://images.unsplash.com/photo-1519457431-44ccd64a579b?w=300&q=80", "kind": "photo", "preview": "Drew a picture for you!", "time": "Yesterday", "unseen": True},
-    {"id": "f5", "name": "Family", "relation": "Album", "avatar": "https://images.unsplash.com/photo-1609220136736-443140cffec6?w=300&q=80", "kind": "album", "preview": "12 new photos in Family Album", "time": "2 days ago", "unseen": True},
-]
-
 NEWS_BASE = [
     {"title": "Monsoon Update for Rajasthan", "summary": "Light showers expected across Jaipur and Jodhpur through the weekend. Cooler evenings ahead.", "source": "India Weather", "image": "https://images.unsplash.com/photo-1519692933481-e162a57d6721?w=900&q=80"},
     {"title": "New Community Health Initiative Launched", "summary": "Free monthly check-ups for senior citizens at neighbourhood clinics begin next Monday.", "source": "Community Times", "image": "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=900&q=80"},
@@ -307,21 +453,6 @@ MED_IMAGES = {
 }
 
 
-async def _seed_elder_data(elder_id: str):
-    meds = [
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "name": "Amlodipine", "dose": "5 mg", "time": "8:00 AM", "type": "tablet", "stock": 6, "per_day": 1, "taken_today": True, "image": MED_IMAGES["tablet"]},
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "name": "Metformin", "dose": "500 mg", "time": "1:00 PM", "type": "tablet", "stock": 4, "per_day": 2, "taken_today": False, "image": MED_IMAGES["tablet"]},
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "name": "Vitamin D3", "dose": "1 capsule", "time": "8:00 PM", "type": "capsule", "stock": 20, "per_day": 1, "taken_today": False, "image": MED_IMAGES["capsule"]},
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "name": "Cough Syrup", "dose": "10 ml", "time": "9:00 PM", "type": "syrup", "stock": 12, "per_day": 1, "taken_today": False, "image": MED_IMAGES["syrup"]},
-    ]
-    await db.medicines.insert_many([m.copy() for m in meds])
-    appts = [
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "doctor": "Dr. Sharma", "specialty": "General Physician", "date": "Tomorrow", "time": "10:30 AM", "place": "Sunshine Clinic", "status": "confirmed"},
-        {"id": str(uuid.uuid4()), "elder_id": elder_id, "doctor": "Dr. Menon", "specialty": "Cardiologist", "date": "Fri, 24 May", "time": "4:00 PM", "place": "Apollo Hospital", "status": "confirmed"},
-    ]
-    await db.appointments.insert_many([a.copy() for a in appts])
-
-
 # ============================ ACTIVITY LOG ============================
 class ActivityIn(BaseModel):
     feature: str
@@ -338,24 +469,32 @@ async def log_activity(b: ActivityIn, u: dict = Depends(require_role("elder"))):
 # ============================ NEWS (infinite) ============================
 @api.get("/news")
 async def get_news(page: int = 0, size: int = 6):
-    items = []
-    for i in range(size):
-        idx = (page * size + i)
-        base = NEWS_BASE[idx % len(NEWS_BASE)]
-        items.append({
-            "id": f"n{idx}",
+    """A finite daily digest. The feed ends instead of looping the same ten stories."""
+    start = max(page, 0) * size
+    window = NEWS_BASE[start:start + size]
+    items = [
+        {
+            "id": f"n{start + i}",
             "title": base["title"],
             "summary": base["summary"],
             "source": base["source"],
             "image": base["image"],
-            "time": "Just now" if idx == 0 else f"{idx}h ago",
-        })
-    return {"items": items, "next_page": page + 1}
+        }
+        for i, base in enumerate(window)
+    ]
+    has_more = start + size < len(NEWS_BASE)
+    return {"items": items, "next_page": page + 1 if has_more else None, "has_more": has_more}
 
 
-@api.get("/family-stories")
-async def family_stories():
-    return FAMILY_STORIES
+@api.get("/family")
+async def family(u: dict = Depends(current_user)):
+    """The people really connected to this elder. Empty until someone joins."""
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    return {
+        "members": await _family_contacts(eid),
+        "family_code": (elder or {}).get("family_code") if u["role"] == "elder" else None,
+    }
 
 
 # ============================ CONTENT (reels) ============================
@@ -373,26 +512,56 @@ async def content_categories():
 
 
 # ============================ HEALTH ============================
-def _med_view(m: dict) -> dict:
+def _med_view(m: dict, taken_today: bool = False) -> dict:
     days_left = m["stock"] // max(m["per_day"], 1)
     return {
         "id": m["id"], "name": m["name"], "dose": m["dose"], "time": m["time"],
         "type": m["type"], "stock": m["stock"], "per_day": m["per_day"],
-        "taken_today": m.get("taken_today", False), "image": m["image"],
+        "taken_today": taken_today, "image": m["image"],
         "days_left": days_left, "low": days_left <= 3,
     }
+
+
+async def _med_views(elder: dict) -> List[dict]:
+    eid = elder["id"]
+    meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
+    taken = await _taken_ids(eid, elder_day(elder))
+    return [_med_view(m, m["id"] in taken) for m in meds]
+
+
+async def _maybe_reorder_task(elder_id: str, med: dict, view: dict) -> Optional[dict]:
+    """One open reorder request per medicine, however it was triggered."""
+    if not view["low"]:
+        return None
+    existing = await db.tasks.find_one(
+        {"elder_id": elder_id, "kind": "reorder", "med_id": med["id"], "status": {"$nin": ["done", "declined"]}}
+    )
+    if existing:
+        return None
+    return await _create_task(
+        elder_id, "reorder", f"Reorder {med['name']}",
+        f"{med['name']} is running low ({plural(view['days_left'], 'day')} left). Please arrange a refill.",
+        med_id=med["id"], auto=True,
+    )
 
 
 @api.get("/health/overview")
 async def health_overview(u: dict = Depends(current_user)):
     eid = await elder_id_for(u)
-    meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
-    appts = await db.appointments.find({"elder_id": eid}, {"_id": 0}).to_list(100)
-    hour = datetime.now().hour
-    greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     elder = await db.users.find_one({"id": eid}, {"_id": 0})
-    med_views = [_med_view(m) for m in meds]
-    missed = await _compute_missed(eid)
+    if not elder:
+        raise HTTPException(404, "Account not found")
+    appts = await db.appointments.find({"elder_id": eid}, {"_id": 0}).to_list(100)
+    hour = elder_now(elder).hour
+    if hour < 12:
+        greeting = "Good morning"
+    elif hour < 17:
+        greeting = "Good afternoon"
+    elif hour < 21:
+        greeting = "Good evening"
+    else:
+        greeting = "Good night"
+    med_views = await _med_views(elder)
     return {
         "greeting": greeting,
         "name": (elder or {}).get("name", "there").split(" ")[0],
@@ -400,27 +569,25 @@ async def health_overview(u: dict = Depends(current_user)):
         "appointments": appts,
         "medicines_due": sum(1 for m in med_views if not m["taken_today"]),
         "low_stock": [m for m in med_views if m["low"]],
-        "missed": missed,
+        "missed": await _compute_missed(elder),
     }
 
 
+class TakeIn(BaseModel):
+    # Explicit intent, so a second tap confirms rather than silently undoing.
+    taken: bool = True
+
 @api.post("/health/medicines/{med_id}/take")
-async def take_medicine(med_id: str, u: dict = Depends(current_user)):
+async def take_medicine(med_id: str, b: Optional[TakeIn] = None, u: dict = Depends(current_user)):
     eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
     m = await db.medicines.find_one({"id": med_id, "elder_id": eid})
-    if not m:
+    if not m or not elder:
         raise HTTPException(404, "Medicine not found")
-    taken = not m.get("taken_today", False)
-    new_stock = m["stock"] - m["per_day"] if taken else m["stock"] + m["per_day"]
-    new_stock = max(new_stock, 0)
-    await db.medicines.update_one({"id": med_id}, {"$set": {"taken_today": taken, "stock": new_stock}})
-    m = await db.medicines.find_one({"id": med_id}, {"_id": 0})
-    view = _med_view(m)
-    reorder = None
-    if taken and view["low"]:
-        existing = await db.tasks.find_one({"elder_id": eid, "kind": "reorder", "med_id": med_id, "status": {"$ne": "done"}})
-        if not existing:
-            reorder = await _create_task(eid, "reorder", f"Reorder {m['name']}", f"{m['name']} is running low ({view['days_left']} days left). Please arrange a refill.", med_id=med_id, auto=True)
+    taken = (b or TakeIn()).taken
+    m = await _set_intake(elder, m, taken)
+    view = _med_view(m, taken)
+    reorder = await _maybe_reorder_task(eid, m, view) if taken else None
     return {"ok": True, "medicine": view, "reorder_task": reorder}
 
 
@@ -435,54 +602,22 @@ class MedIn(BaseModel):
 @api.post("/health/medicines")
 async def add_medicine(b: MedIn, u: dict = Depends(current_user)):
     eid = await elder_id_for(u)
+    name = b.name.strip()
+    if not name:
+        raise HTTPException(422, "Please give the medicine a name")
     m = {
-        "id": str(uuid.uuid4()), "elder_id": eid, "name": b.name, "dose": b.dose,
+        "id": str(uuid.uuid4()), "elder_id": eid, "name": name, "dose": b.dose,
         "time": b.time, "type": b.type if b.type in MED_IMAGES else "tablet",
-        "per_day": max(b.per_day, 1), "stock": b.stock, "taken_today": False,
+        "per_day": max(b.per_day, 1), "stock": b.stock,
         "image": MED_IMAGES.get(b.type, MED_IMAGES["tablet"]),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.medicines.insert_one(m.copy())
-    return _med_view(m)
+    return _med_view(m, False)
 
 
 class OCRIn(BaseModel):
     image_base64: str
-
-@api.post("/health/ocr")
-async def prescription_ocr(b: OCRIn, u: dict = Depends(require_role("elder"))):
-    if not EMERGENT_LLM_KEY:
-        raise HTTPException(500, "AI not configured")
-    img = b.image_base64
-    if "," in img and img.strip().startswith("data:"):
-        img = img.split(",", 1)[1]
-    try:
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY, session_id=f"ocr-{uuid.uuid4()}",
-            system_message=(
-                "You read a photo of a medical prescription. Extract the medicines. "
-                "Return ONLY a JSON array. Each item: {\"name\": str, \"dose\": str, "
-                "\"time\": str (e.g. '8:00 AM'), \"type\": one of tablet|capsule|syrup|drops, "
-                "\"per_day\": int}. If unreadable, return []."
-            ),
-        ).with_model(*GEMINI)
-        msg = UserMessage(text="Extract the medicines from this prescription.", file_contents=[ImageContent(image_base64=img)])
-        raw = str(await chat.send_message(msg))
-        m = re.search(r"\[.*\]", raw, re.S)
-        meds = json.loads(m.group(0)) if m else []
-    except Exception as e:
-        logger.exception("ocr failed")
-        raise HTTPException(502, f"Could not read the prescription: {e}")
-    clean = []
-    for it in meds[:10]:
-        clean.append({
-            "name": str(it.get("name", "")).strip()[:60],
-            "dose": str(it.get("dose", "")).strip()[:40],
-            "time": str(it.get("time", "8:00 AM")).strip()[:20],
-            "type": it.get("type") if it.get("type") in MED_IMAGES else "tablet",
-            "per_day": int(it.get("per_day", 1) or 1),
-        })
-    return {"medicines": [c for c in clean if c["name"]]}
-
 
 async def _ocr_extract(img_b64: str) -> list:
     chat = LlmChat(
@@ -554,9 +689,44 @@ async def list_prescriptions(u: dict = Depends(current_user)):
     return [{"id": d["id"], "medicines": d["medicines"], "created_at": d["created_at"]} for d in docs]
 
 
+def make_image_token(uid: str) -> str:
+    """A narrow, short-lived token. A leaked image URL can't be replayed as a session."""
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"sub": uid, "scope": "prescription_image", "iat": now,
+         "exp": now + timedelta(minutes=IMAGE_TOKEN_MINUTES)},
+        JWT_SECRET, algorithm=JWT_ALG,
+    )
+
+
+@api.post("/prescriptions/image-token")
+async def prescription_image_token(u: dict = Depends(current_user)):
+    return {"token": make_image_token(u["id"]), "expires_in": IMAGE_TOKEN_MINUTES * 60}
+
+
 @api.get("/prescriptions/{pid}/image")
-async def prescription_image(pid: str, token: str = Query(...)):
-    u = await user_from_token(token)
+async def prescription_image(
+    pid: str,
+    token: Optional[str] = Query(None),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+):
+    """Prefer the Authorization header; fall back to a scoped image token for
+    clients that can't set headers on an image request."""
+    if creds:
+        u = await current_user(creds)
+    elif token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        except Exception:
+            raise HTTPException(401, "Invalid token")
+        if payload.get("scope") != "prescription_image":
+            raise HTTPException(403, "This token cannot be used for images")
+        u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
+        if not u:
+            raise HTTPException(401, "User not found")
+    else:
+        raise HTTPException(401, "Not authenticated")
+
     eid = await elder_id_for(u)
     doc = await db.prescriptions.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
     if not doc:
@@ -565,7 +735,7 @@ async def prescription_image(pid: str, token: str = Query(...)):
         content, ctype = await run_in_threadpool(get_object, doc["storage_path"])
     except Exception:
         raise HTTPException(404, "Image not available")
-    return Response(content=content, media_type=ctype)
+    return Response(content=content, media_type=ctype, headers={"Cache-Control": "private, max-age=300"})
 
 
 # ============================ CONCIERGE / TASKS ============================
@@ -587,6 +757,10 @@ class ConciergeIn(BaseModel):
 
 @api.post("/concierge/request")
 async def concierge_request(b: ConciergeIn, u: dict = Depends(require_role("elder"))):
+    b.request = b.request.strip()
+    if not b.request:
+        raise HTTPException(422, "Please tell us what you'd like us to arrange")
+    detail = b.request
     if not EMERGENT_LLM_KEY:
         kind, title = "other", b.request[:60]
     else:
@@ -651,17 +825,66 @@ async def notify(b: NotifyIn, u: dict = Depends(current_user)):
 
 
 # ============================ SOS / IM-OKAY ============================
+async def _alert_family(elder_id: str, kind: str, message: str) -> List[dict]:
+    """Write one notification per really-connected family member. Returns who got it."""
+    contacts = await _family_contacts(elder_id)
+    now = datetime.now(timezone.utc).isoformat()
+    for c in contacts:
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": elder_id, "kind": kind,
+            "to": "family", "to_user_id": c["id"], "message": message,
+            "at": now, "read": False,
+        })
+    return contacts
+
+
 @api.post("/sos")
 async def sos(u: dict = Depends(current_user)):
+    """Raise an alert and report only what actually happened.
+
+    Nothing here promises delivery we can't prove. If no family member has joined
+    yet, the caller is told plainly so it can offer the emergency dialler instead.
+    """
     eid = await elder_id_for(u)
-    await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "type": "sos", "at": datetime.now(timezone.utc).isoformat()})
-    return {"ok": True, "message": "Your family has been alerted. Help is on the way.", "contacts_notified": ["Priya (Daughter)", "Rahul (Son)", "Dr. Sharma"]}
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    name = (elder or {}).get("name", "Your parent")
+    await db.events.insert_one({
+        "id": str(uuid.uuid4()), "elder_id": eid, "type": "sos",
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    contacts = await _alert_family(eid, "sos", f"{name} pressed the SOS button and needs help now.")
+    if contacts:
+        message = (
+            f"We've alerted {plural(len(contacts), 'family member')}. "
+            f"They will see this as soon as they open Sunshine. "
+            f"If this is urgent, call {EMERGENCY_NUMBER} as well."
+        )
+    else:
+        message = (
+            "No family member is connected to your account yet, so nobody could be alerted. "
+            f"Please call {EMERGENCY_NUMBER} for emergency help."
+        )
+    return {
+        "ok": True,
+        "delivered": bool(contacts),
+        "message": message,
+        "contacts_notified": [c["name"] for c in contacts],
+        "emergency_number": EMERGENCY_NUMBER,
+    }
 
 
 @api.post("/im-okay")
 async def im_okay(u: dict = Depends(require_role("elder"))):
-    await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": u["id"], "type": "im_okay", "at": datetime.now(timezone.utc).isoformat()})
-    return {"ok": True, "message": "Your family has been reassured. Have a lovely day!"}
+    await db.events.insert_one({
+        "id": str(uuid.uuid4()), "elder_id": u["id"], "type": "im_okay",
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    contacts = await _alert_family(u["id"], "im_okay", f"{u.get('name', 'Your parent')} let you know they are doing well.")
+    if contacts:
+        message = f"We've let {plural(len(contacts), 'family member')} know you're doing well."
+    else:
+        message = "No family member is connected yet. Share your family code so they can see this."
+    return {"ok": True, "delivered": bool(contacts), "message": message, "contacts_notified": [c["name"] for c in contacts]}
 
 
 # ============================ CHILD ANALYTICS ============================
@@ -676,16 +899,17 @@ async def child_analytics(u: dict = Depends(require_role("child"))):
     counts: dict = {}
     for a in acts:
         counts[a["feature"]] = counts.get(a["feature"], 0) + 1
-    most_used = max(counts, key=counts.get) if counts else "News"
-    meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
-    med_views = [_med_view(m) for m in meds]
+    most_used = max(counts, key=counts.get) if counts else None
+    med_views = await _med_views(elder)
     appts = await db.appointments.find({"elder_id": eid}, {"_id": 0}).to_list(100)
     pending = await db.tasks.count_documents({"elder_id": eid, "status": {"$in": ["requested"]}})
-    missed = await _compute_missed(eid)
-    alerts = await db.notifications.find({"elder_id": eid, "kind": "missed_dose"}, {"_id": 0}).sort("at", -1).to_list(20)
+    missed = await _compute_missed(elder)
+    alerts = await db.notifications.find(
+        {"elder_id": eid, "kind": {"$in": ["missed_dose", "sos", "im_okay"]}}, {"_id": 0}
+    ).sort("at", -1).to_list(20)
     return {
         "elder_name": elder["name"],
-        "location": elder.get("location", "Unknown"),
+        "location": elder.get("location") or "Not set",
         "last_active": last_active,
         "most_used_feature": most_used,
         "feature_counts": counts,
@@ -694,7 +918,7 @@ async def child_analytics(u: dict = Depends(require_role("child"))):
         "appointments": appts,
         "pending_tasks": pending,
         "missed_doses": missed,
-        "alerts": [{"message": a["message"], "at": a["at"], "day": a.get("day")} for a in alerts],
+        "alerts": [{"kind": a.get("kind"), "message": a["message"], "at": a["at"], "day": a.get("day")} for a in alerts],
     }
 
 
@@ -705,7 +929,7 @@ class VoiceAsk(BaseModel):
     question: str
 
 @api.post("/voice/ask")
-async def voice_ask(b: VoiceAsk):
+async def voice_ask(b: VoiceAsk, u: dict = Depends(current_user)):
     if not EMERGENT_LLM_KEY:
         raise HTTPException(500, "AI not configured")
     chat = LlmChat(
@@ -729,41 +953,53 @@ class AssistantChatIn(BaseModel):
     message: str
 
 @api.post("/assistant/chat")
-async def assistant_chat(b: AssistantChatIn):
+async def assistant_chat(b: AssistantChatIn, u: dict = Depends(current_user)):
     if not EMERGENT_LLM_KEY:
         raise HTTPException(500, "AI not configured")
     msg = b.message.strip()
     if not msg:
         raise HTTPException(400, "Message cannot be empty")
     sid = b.session_id or str(uuid.uuid4())
-    hist = await db.assistant_messages.find({"session_id": sid}).sort("created_at", 1).to_list(40)
-    ctx = "\n".join([("Kamala" if m["role"] == "user" else "Sunshine") + ": " + m["text"] for m in hist[-10:]])
+    # A session belongs to whoever opened it. Health questions aren't readable
+    # by anyone who happens to guess the id.
+    owned = await db.assistant_messages.find_one({"session_id": sid})
+    if owned and owned.get("user_id") != u["id"]:
+        raise HTTPException(403, "This conversation belongs to another account")
+
+    hist = await db.assistant_messages.find({"session_id": sid, "user_id": u["id"]}).sort("created_at", 1).to_list(40)
+    first_name = (u.get("name") or "They").split(" ")[0]
+    ctx = "\n".join([(first_name if m["role"] == "user" else "Sunshine") + ": " + m["text"] for m in hist[-10:]])
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=sid, system_message=ASSISTANT_SYS).with_model(*GEMINI)
     prompt = f"Our chat so far:\n{ctx}\n\nThey now say: {msg}\n\nReply warmly as Sunshine." if ctx else msg
     answer = str(await chat.send_message(UserMessage(text=prompt))).strip()
-    action = await _detect_action(msg)
+    action = await _detect_action(await elder_id_for(u), msg)
     now = datetime.now(timezone.utc).isoformat()
     await db.assistant_messages.insert_many([
-        {"id": str(uuid.uuid4()), "session_id": sid, "role": "user", "text": msg, "created_at": now},
-        {"id": str(uuid.uuid4()), "session_id": sid, "role": "assistant", "text": answer, "created_at": now},
+        {"id": str(uuid.uuid4()), "session_id": sid, "user_id": u["id"], "role": "user", "text": msg, "created_at": now},
+        {"id": str(uuid.uuid4()), "session_id": sid, "user_id": u["id"], "role": "assistant", "text": answer, "created_at": now},
     ])
     return {"session_id": sid, "answer": answer, "action": action}
 
 
-async def _detect_action(message: str) -> Optional[dict]:
-    """Detect if the user wants to call or message a family member/doctor."""
+async def _detect_action(elder_id: str, message: str) -> Optional[dict]:
+    """Detect a call/message intent, resolved against really-connected people."""
     if not EMERGENT_LLM_KEY:
         return None
+    contacts = await _family_contacts(elder_id)
+    if not contacts:
+        return None
+    roster = ", ".join(f"{c['name']} ({c['relation']})" for c in contacts)
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY, session_id=f"act-{uuid.uuid4()}",
             system_message=(
                 "Decide if the user wants to CALL someone or SEND A MESSAGE to someone. "
-                "People allowed: daughter (Priya), son (Rahul), doctor (Dr. Sharma). "
+                f"The only people available are: {roster}. "
                 "Return ONLY JSON: {\"type\": one of none|call|message, "
-                "\"target\": one of daughter|son|doctor|null, "
+                "\"name\": the exact name of the person from the list, or null, "
                 "\"message\": the message text if type is message else null}. "
-                "If it is just a question or chit-chat, return {\"type\":\"none\",\"target\":null,\"message\":null}."
+                "If they mean somebody who is not on the list, return type none. "
+                "If it is just a question or chit-chat, return {\"type\":\"none\",\"name\":null,\"message\":null}."
             ),
         ).with_model(*OPENAI_MINI)
         raw = str(await chat.send_message(UserMessage(text=message)))
@@ -771,27 +1007,36 @@ async def _detect_action(message: str) -> Optional[dict]:
         if not mm:
             return None
         parsed = json.loads(mm.group(0))
-        if parsed.get("type") in {"call", "message"} and parsed.get("target") in {"daughter", "son", "doctor"}:
-            names = {"daughter": "Priya", "son": "Rahul", "doctor": "Dr. Sharma"}
-            return {"type": parsed["type"], "target": parsed["target"], "target_name": names[parsed["target"]], "message": parsed.get("message")}
+        if parsed.get("type") not in {"call", "message"}:
+            return None
+        wanted = (parsed.get("name") or "").strip().lower()
+        match = next((c for c in contacts if c["name"].lower() == wanted), None)
+        if not match:
+            return None
+        return {
+            "type": parsed["type"], "target": match["id"], "target_name": match["name"],
+            "relation": match["relation"], "message": parsed.get("message"),
+        }
     except Exception:
         logger.exception("_detect_action failed")
     return None
 
 @api.get("/assistant/history")
-async def assistant_history(session_id: str):
-    docs = await db.assistant_messages.find({"session_id": session_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
+async def assistant_history(session_id: str, u: dict = Depends(current_user)):
+    docs = await db.assistant_messages.find(
+        {"session_id": session_id, "user_id": u["id"]}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
     return [{"role": d["role"], "text": d["text"]} for d in docs]
 
 
 # ============================ VOICE AGENT (talk to Sunshine) ============================
 AGENT_SYS = (
-    "You are Sunshine, a warm voice assistant for an older adult named Kamala in India. "
+    "You are Sunshine, a warm voice assistant for an older adult in India. "
     "You can DO things in her app. Read her request and choose ONE intent, then reply in ONE short warm spoken sentence. "
     "Return ONLY JSON with these keys: "
     "reply (string, one short kind sentence spoken back to her), "
     "intent (one of: call, notify, mark_medicine, add_medicine, voice_note, order_medicine, book_doctor, arrange_transport, im_okay, sos, answer), "
-    "target (one of: daughter, son, doctor, or null), "
+    "name (the exact name of the person from the contact list you are given, or null), "
     "medicine (the medicine name, or null), "
     "dose (e.g. '500 mg' or '1 tablet', or null), "
     "time (e.g. '9:00 PM', or null), "
@@ -803,10 +1048,8 @@ AGENT_SYS = (
     "mark_medicine=mark an existing medicine as taken; add_medicine=add a NEW medicine to her list (she says its name, dose and time); "
     "voice_note=record and send a voice note to target; order_medicine=arrange a medicine refill; book_doctor=arrange a doctor consultation; "
     "arrange_transport=arrange a taxi; im_okay=reassure family; sos=emergency alert; answer=just answer her question. "
-    "People: daughter is Priya, son is Rahul, doctor is Dr. Sharma. "
     "If it is a general question, use intent 'answer'. No emojis, no jargon."
 )
-NAMES = {"daughter": "Priya", "son": "Rahul", "doctor": "Dr. Sharma"}
 
 
 async def _transcribe_audio(audio: bytes, ext: str) -> str:
@@ -818,11 +1061,17 @@ async def _transcribe_audio(audio: bytes, ext: str) -> str:
 
 
 async def _run_agent(elder: dict, message: str) -> dict:
-    """LLM decides an intent; backend executes data actions and returns a result."""
+    """LLM picks an intent; the backend executes it and reports only what it did."""
     eid = elder["id"]
-    parsed = {"reply": "", "intent": "answer", "target": None, "medicine": None, "dose": None, "time": None, "med_type": None, "per_day": None, "message": None, "details": None}
+    contacts = await _family_contacts(eid)
+    roster = ", ".join(f"{c['name']} ({c['relation']})" for c in contacts) or "nobody yet"
+    parsed = {"reply": "", "intent": "answer", "name": None, "medicine": None, "dose": None,
+              "time": None, "med_type": None, "per_day": None, "message": None, "details": None}
     try:
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}", system_message=AGENT_SYS).with_model(*AGENT_MODEL)
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}",
+            system_message=AGENT_SYS + f" Her connected contacts are: {roster}.",
+        ).with_model(*AGENT_MODEL)
         raw = str(await chat.send_message(UserMessage(text=message)))
         mm = re.search(r"\{.*\}", raw, re.S)
         if mm:
@@ -832,29 +1081,46 @@ async def _run_agent(elder: dict, message: str) -> dict:
         logger.exception("agent llm failed")
 
     intent = parsed.get("intent") or "answer"
-    target = parsed.get("target") if parsed.get("target") in NAMES else None
     reply = (parsed.get("reply") or "").strip()
+    wanted = (parsed.get("name") or "").strip().lower()
+    contact = next((c for c in contacts if c["name"].lower() == wanted), None)
     action = None
     executed = None
 
-    if intent == "call" and target:
-        action = {"type": "call", "target": target, "target_name": NAMES[target], "confirm": True}
+    # Anything addressed to a person needs a real person to address.
+    if intent in {"call", "notify", "voice_note"} and not contact:
+        if not contacts:
+            return {
+                "reply": "Nobody is connected to your account yet. Share your family code from your Profile and they can join.",
+                "action": {"type": "invite"}, "executed": None, "intent": "answer",
+            }
+        return {
+            "reply": f"I'm not sure who you mean. You can reach {roster}.",
+            "action": None, "executed": None, "intent": "answer",
+        }
+
+    if intent == "call":
+        action = {"type": "call", "target": contact["id"], "target_name": contact["name"], "confirm": True}
         if not reply:
-            reply = f"Shall I call {NAMES[target]}? Tap Yes to confirm."
+            reply = f"Shall I call {contact['name']}? Tap Yes to confirm."
     elif intent == "sos":
         action = {"type": "sos", "confirm": True}
         if not reply:
-            reply = "Do you need emergency help? Tap Yes and I'll alert your family and doctor."
-    elif intent == "notify" and target:
-        msg = parsed.get("message") or "Hello from Kamala!"
-        await db.notifications.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "to": target, "message": msg, "from_role": "elder", "kind": "message", "at": datetime.now(timezone.utc).isoformat()})
-        executed = f"Message sent to {NAMES[target]}"
+            reply = "Do you need emergency help? Tap Yes and I'll alert your family."
+    elif intent == "notify":
+        msg = parsed.get("message") or f"Hello from {elder.get('name', 'your parent')}!"
+        await db.notifications.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": eid, "to": "family", "to_user_id": contact["id"],
+            "message": msg, "from_role": "elder", "kind": "message",
+            "at": datetime.now(timezone.utc).isoformat(), "read": False,
+        })
+        executed = f"Message sent to {contact['name']}"
         if not reply:
-            reply = f"I've sent your message to {NAMES[target]}."
-    elif intent == "voice_note" and target:
-        action = {"type": "voice_note", "target": target, "target_name": NAMES[target]}
+            reply = f"I've sent your message to {contact['name']}."
+    elif intent == "voice_note":
+        action = {"type": "voice_note", "target": contact["id"], "target_name": contact["name"]}
         if not reply:
-            reply = f"Sure. Record your voice note for {NAMES[target]} now."
+            reply = f"Sure. Record your voice note for {contact['name']} now."
     elif intent == "add_medicine":
         name = (parsed.get("medicine") or "").strip()
         if name:
@@ -865,9 +1131,11 @@ async def _run_agent(elder: dict, message: str) -> dict:
                 per_day = 1
             m = {
                 "id": str(uuid.uuid4()), "elder_id": eid, "name": name[:60],
-                "dose": (parsed.get("dose") or "").strip()[:40], "time": (parsed.get("time") or "8:00 AM").strip()[:20],
-                "type": mtype, "per_day": max(per_day, 1), "stock": 30, "taken_today": False,
+                "dose": (parsed.get("dose") or "").strip()[:40],
+                "time": (parsed.get("time") or "8:00 AM").strip()[:20],
+                "type": mtype, "per_day": max(per_day, 1), "stock": 30,
                 "image": MED_IMAGES.get(mtype, MED_IMAGES["tablet"]),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await db.medicines.insert_one(m.copy())
             executed = f"Added {name} to your medicines"
@@ -876,44 +1144,56 @@ async def _run_agent(elder: dict, message: str) -> dict:
         else:
             reply = reply or "What is the name of the medicine you'd like to add?"
     elif intent == "mark_medicine":
-        wanted = (parsed.get("medicine") or "").lower().strip()
+        wanted_med = (parsed.get("medicine") or "").lower().strip()
         meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
+        taken = await _taken_ids(eid, elder_day(elder))
         target_med = None
-        if wanted:
-            target_med = next((m for m in meds if wanted in m["name"].lower() or m["name"].lower() in wanted), None)
+        if wanted_med:
+            target_med = next((m for m in meds if wanted_med in m["name"].lower() or m["name"].lower() in wanted_med), None)
         if not target_med:
-            target_med = next((m for m in meds if not m.get("taken_today")), None)
-        if target_med:
-            new_stock = max(target_med["stock"] - target_med["per_day"], 0)
-            await db.medicines.update_one({"id": target_med["id"]}, {"$set": {"taken_today": True, "stock": new_stock}})
+            target_med = next((m for m in meds if m["id"] not in taken), None)
+        if not meds:
+            reply = reply or "You haven't added any medicines yet. Scan a prescription and I'll keep track for you."
+        elif target_med and target_med["id"] in taken:
+            reply = reply or f"Your {target_med['name']} is already marked as taken today."
+        elif target_med:
+            updated = await _set_intake(elder, target_med, True)
+            await _maybe_reorder_task(eid, updated, _med_view(updated, True))
             executed = f"Marked {target_med['name']} as taken"
             if not reply:
                 reply = f"Well done. I've marked your {target_med['name']} as taken."
         else:
             reply = reply or "All your medicines are already marked as taken. Great job!"
     elif intent == "order_medicine":
-        t = await _create_task(eid, "reorder", "Reorder medicine", parsed.get("details") or "Please arrange a medicine refill.")
+        await _create_task(eid, "reorder", "Reorder medicine", parsed.get("details") or "Please arrange a medicine refill.")
         executed = "Reorder request sent to your family"
         if not reply:
             reply = "I've asked your family to arrange a medicine refill."
     elif intent == "book_doctor":
-        t = await _create_task(eid, "doctor", "Book a doctor", parsed.get("details") or "Please book a doctor consultation.")
+        await _create_task(eid, "doctor", "Book a doctor", parsed.get("details") or "Please book a doctor consultation.")
         executed = "Doctor booking request sent to your family"
         if not reply:
             reply = "I've requested a doctor consultation for you."
     elif intent == "arrange_transport":
-        t = await _create_task(eid, "transport", "Arrange transport", parsed.get("details") or "Please arrange transport.")
+        await _create_task(eid, "transport", "Arrange transport", parsed.get("details") or "Please arrange transport.")
         executed = "Transport request sent to your family"
         if not reply:
             reply = "I've asked your family to arrange transport for you."
     elif intent == "im_okay":
-        await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "type": "im_okay", "at": datetime.now(timezone.utc).isoformat()})
-        executed = "Your family has been reassured"
+        await db.events.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": eid, "type": "im_okay",
+            "at": datetime.now(timezone.utc).isoformat(),
+        })
+        reached = await _alert_family(eid, "im_okay", f"{elder.get('name', 'Your parent')} let you know they are doing well.")
+        executed = f"Told {plural(len(reached), 'family member')} you're well" if reached else None
         if not reply:
-            reply = "I've let your family know you are doing well."
+            reply = (
+                "I've let your family know you are doing well." if reached
+                else "Nobody is connected to your account yet, so I couldn't tell anyone. Share your family code from your Profile."
+            )
     else:
         if not reply:
-            reply = "I'm here to help. You can ask me to call family, send a message, mark medicines, or arrange things."
+            reply = "I'm here to help. You can ask me to mark medicines, arrange a refill, or reach your family."
 
     return {"reply": reply, "action": action, "executed": executed, "intent": intent}
 
@@ -962,15 +1242,24 @@ app.include_router(api)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+_sweep_task: Optional[asyncio.Task] = None
+
+
 @app.on_event("startup")
 async def startup():
+    global _sweep_task
     try:
         await run_in_threadpool(init_storage)
         logger.info("Object storage initialized")
     except Exception:
         logger.exception("Object storage init failed (will retry on first upload)")
+    if os.environ.get("DISABLE_SWEEP") != "1":
+        _sweep_task = asyncio.create_task(_missed_dose_sweep())
+        logger.info("Missed-dose sweep started")
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    if _sweep_task:
+        _sweep_task.cancel()
     client.close()

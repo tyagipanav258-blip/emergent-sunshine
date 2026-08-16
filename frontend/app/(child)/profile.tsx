@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { View, StyleSheet, ScrollView, Pressable } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth";
@@ -13,17 +14,17 @@ export default function ChildProfile() {
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.avatar}><Ionicons name="person" size={44} color={theme.colors.brand} /></View>
-          <Text style={styles.name}>{user?.name}</Text>
-          <Text style={styles.sub}>{user?.email}</Text>
+          <AppText style={styles.name}>{user?.name}</AppText>
+          <AppText style={styles.sub}>{user?.email}</AppText>
         </View>
 
         <View style={styles.linkCard} testID="linked-parent">
           <Ionicons name="link" size={26} color={theme.colors.brand} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.linkLabel}>Connected to</Text>
-            <Text style={styles.linkValue}>{user?.elder_name || "Your parent"}</Text>
+            <AppText style={styles.linkLabel}>Connected to</AppText>
+            <AppText style={styles.linkValue}>{user?.elder_name || "Your parent"}</AppText>
           </View>
-          <View style={styles.livePill}><View style={styles.liveDot} /><Text style={styles.liveText}>Linked</Text></View>
+          <View style={styles.livePill}><View style={styles.liveDot} /><AppText style={styles.liveText}>Linked</AppText></View>
         </View>
 
         <View style={styles.rows}>
@@ -37,8 +38,8 @@ export default function ChildProfile() {
               <Pressable style={styles.row} testID={`crow-${r.label}`}>
                 <View style={styles.rowIcon}><Ionicons name={r.icon as any} size={22} color={theme.colors.brand} /></View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.rowLabel}>{r.label}</Text>
-                  <Text style={styles.rowSub}>{r.sub}</Text>
+                  <AppText style={styles.rowLabel}>{r.label}</AppText>
+                  <AppText style={styles.rowSub}>{r.sub}</AppText>
                 </View>
                 <Ionicons name="chevron-forward" size={22} color={theme.colors.muted} />
               </Pressable>
@@ -47,9 +48,15 @@ export default function ChildProfile() {
           ))}
         </View>
 
-        <Pressable style={styles.logout} onPress={signOut} testID="child-logout">
+        <Pressable
+          style={styles.logout}
+          onPress={signOut}
+          testID="child-logout"
+          accessibilityRole="button"
+          accessibilityLabel="Log out of Sunshine"
+        >
           <Ionicons name="log-out-outline" size={24} color={theme.colors.error} />
-          <Text style={styles.logoutText}>Log out</Text>
+          <AppText style={styles.logoutText}>Log out</AppText>
         </Pressable>
       </ScrollView>
     </View>

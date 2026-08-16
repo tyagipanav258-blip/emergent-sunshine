@@ -156,30 +156,52 @@ class TestMissedDose:
 
 # ============================ ASSISTANT ACTIONS ============================
 class TestAssistantActions:
-    def test_call_daughter(self, s):
+    """Actions resolve against the family really connected to this elder.
+
+    There is no built-in cast of relatives any more, so the assistant can only
+    offer to reach somebody who has actually joined with the family code.
+    """
+
+    def test_requires_authentication(self, s):
+        r = s.post(f"{API}/assistant/chat", json={"message": "Hello"}, timeout=TIMEOUT)
+        assert r.status_code in (401, 403), f"assistant must not be open to the world: {r.status_code}"
+
+    def test_call_connected_family_member(self, s, ctx):
+        name = ctx["child"]["name"]
         r = s.post(f"{API}/assistant/chat",
-                   json={"message": "Please call my daughter"}, timeout=AI_TIMEOUT)
+                   headers=eh(ctx),
+                   json={"message": f"Please call {name}"}, timeout=AI_TIMEOUT)
         assert r.status_code == 200, r.text
         d = r.json()
         assert d.get("action") is not None, f"action should not be null: {d}"
         assert d["action"]["type"] == "call"
-        assert d["action"]["target"] == "daughter"
-        assert d["action"]["target_name"] == "Priya"
+        assert d["action"]["target_name"] == name
 
-    def test_message_son_lunch(self, s):
+    def test_message_connected_family_member(self, s, ctx):
+        name = ctx["child"]["name"]
         r = s.post(f"{API}/assistant/chat",
-                   json={"message": "Tell my son I had lunch"}, timeout=AI_TIMEOUT)
+                   headers=eh(ctx),
+                   json={"message": f"Tell {name} I had lunch"}, timeout=AI_TIMEOUT)
         assert r.status_code == 200
         d = r.json()
         assert d.get("action") is not None, f"expected message action, got {d}"
         assert d["action"]["type"] == "message"
-        assert d["action"]["target"] == "son"
-        assert d["action"]["target_name"] == "Rahul"
+        assert d["action"]["target_name"] == name
         assert d["action"].get("message"), "message content should be present"
-        assert "lunch" in d["action"]["message"].lower()
 
-    def test_plain_question_no_action(self, s):
+    def test_unknown_person_gets_no_action(self, s, ctx):
         r = s.post(f"{API}/assistant/chat",
+                   headers=eh(ctx),
+                   json={"message": "Please call my cousin Ramesh in Delhi"}, timeout=AI_TIMEOUT)
+        assert r.status_code == 200
+        action = r.json().get("action")
+        assert action is None or action.get("type") == "none", (
+            f"must not invent a contact who has not joined: {action}"
+        )
+
+    def test_plain_question_no_action(self, s, ctx):
+        r = s.post(f"{API}/assistant/chat",
+                   headers=eh(ctx),
                    json={"message": "What is a good breakfast?"}, timeout=AI_TIMEOUT)
         assert r.status_code == 200
         d = r.json()

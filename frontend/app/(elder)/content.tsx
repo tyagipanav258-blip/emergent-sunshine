@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { View, Text, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform } from "react-native";
+import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -63,13 +64,13 @@ export default function ElderContent() {
       )}
 
       <LinearGradient pointerEvents="box-none" colors={["rgba(0,0,0,0.6)", "rgba(0,0,0,0)"]} style={[styles.top, { paddingTop: insets.top + 6 }]}>
-        <Text style={styles.title}>Watch</Text>
+        <AppText style={styles.title}>Watch</AppText>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
           {CATS.map((c) => {
             const on = c === cat;
             return (
               <Pressable key={c} style={[styles.chip, on && styles.chipOn]} onPress={() => { if (Platform.OS !== "web") Haptics.selectionAsync(); setCat(c); }} testID={`content-chip-${c.toLowerCase()}`}>
-                <Text style={[styles.chipText, on && styles.chipTextOn]}>{c}</Text>
+                <AppText style={[styles.chipText, on && styles.chipTextOn]}>{c}</AppText>
               </Pressable>
             );
           })}
@@ -95,27 +96,43 @@ function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active:
       <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
       <Image source={{ uri: reel.thumbnail_url }} style={[StyleSheet.absoluteFill, { opacity: 0.55 }]} contentFit="cover" />
       <LinearGradient colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.85)"]} style={styles.bottomScrim} pointerEvents="none" />
-      <Pressable style={StyleSheet.absoluteFill} onPress={toggle}>
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={toggle}
+        accessibilityRole="button"
+        accessibilityLabel={playing ? `Pause ${reel.title}` : `Play ${reel.title}`}
+      >
         {!playing && <View style={styles.playWrap}><View style={styles.play}><Ionicons name="play" size={44} color="#fff" /></View></View>}
       </Pressable>
-      <View style={[styles.rail, { bottom: insets.bottom + 150 }]}>
-        <Pressable style={styles.railBtn} onPress={onLike} testID={`like-${reel.id}`}>
+      <View style={[styles.rail, { bottom: insets.bottom + 24 }]}>
+        <Pressable
+          style={styles.railBtn}
+          onPress={onLike}
+          testID={`like-${reel.id}`}
+          accessibilityRole="button"
+          accessibilityLabel={liked ? "Remove like" : "Like this video"}
+        >
           <View style={styles.railCircle}><Ionicons name={liked ? "heart" : "heart-outline"} size={30} color={liked ? theme.colors.marigold : "#fff"} /></View>
-          <Text style={styles.railLabel}>{liked ? reel.likes + 1 : reel.likes}</Text>
+          <AppText style={styles.railLabel}>{liked ? reel.likes + 1 : reel.likes}</AppText>
         </Pressable>
-        <Pressable style={styles.railBtn} testID={`share-${reel.id}`}>
+        <Pressable
+          style={styles.railBtn}
+          testID={`share-${reel.id}`}
+          accessibilityRole="button"
+          accessibilityLabel="Share this video"
+        >
           <View style={styles.railCircle}><Ionicons name="share-social" size={28} color="#fff" /></View>
-          <Text style={styles.railLabel}>Share</Text>
+          <AppText style={styles.railLabel}>Share</AppText>
         </Pressable>
       </View>
       <View style={[styles.info, { paddingBottom: insets.bottom + 24 }]}>
-        <View style={styles.catPill}><Text style={styles.catPillText}>{reel.category}</Text></View>
+        <View style={styles.catPill}><AppText style={styles.catPillText}>{reel.category}</AppText></View>
         <View style={styles.creatorRow}>
           <Image source={{ uri: reel.creator_avatar }} style={styles.creatorAv} />
-          <Text style={styles.creator}>{reel.creator}</Text>
+          <AppText style={styles.creator}>{reel.creator}</AppText>
         </View>
-        <Text style={styles.reelTitle}>{reel.title}</Text>
-        <Text style={styles.reelDesc} numberOfLines={2}>{reel.description}</Text>
+        <AppText style={styles.reelTitle}>{reel.title}</AppText>
+        <AppText style={styles.reelDesc} numberOfLines={2}>{reel.description}</AppText>
       </View>
     </View>
   );

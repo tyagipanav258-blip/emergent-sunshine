@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, TextInput, Linking } from "react-native";
+import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, TextInput, Linking } from "react-native";
+import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
@@ -16,7 +16,6 @@ const TYPE_ICON: Record<string, any> = { tablet: "ellipse", capsule: "medical", 
 
 export default function ElderHealth() {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
   const [meds, setMeds] = useState<Med[]>([]);
   const [appts, setAppts] = useState<Appt[]>([]);
   const [missed, setMissed] = useState<any[]>([]);
@@ -26,6 +25,7 @@ export default function ElderHealth() {
   const [ocr, setOcr] = useState<{ open: boolean; busy?: boolean; result?: any[]; error?: string }>({ open: false });
   const [concierge, setConcierge] = useState<{ open: boolean; text: string; busy?: boolean; done?: string }>({ open: false, text: "" });
   const [toast, setToast] = useState("");
+  const [undo, setUndo] = useState<Med | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -39,14 +39,25 @@ export default function ElderHealth() {
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2500); };
 
-  const takeMed = async (id: string) => {
+  /**
+   * Confirming a dose is explicit, never a toggle: tapping an already-confirmed
+   * medicine asks first, so a mis-tap can't silently erase an adherence record.
+   */
+  const setMedTaken = async (id: string, taken: boolean) => {
     if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setMeds((prev) => prev.map((m) => m.id === id ? { ...m, taken_today: !m.taken_today } : m));
+    setMeds((prev) => prev.map((m) => (m.id === id ? { ...m, taken_today: taken } : m)));
     try {
-      const r = await apiFetch<any>(`/health/medicines/${id}/take`, { method: "POST" });
-      setMeds((prev) => prev.map((m) => m.id === id ? r.medicine : m));
+      const r = await apiFetch<any>(`/health/medicines/${id}/take`, { method: "POST", body: { taken } });
+      setMeds((prev) => prev.map((m) => (m.id === id ? r.medicine : m)));
       if (r.reorder_task) showToast(`${r.medicine.name} is low — reorder sent to family`);
-    } catch {}
+    } catch {
+      load();
+    }
+  };
+
+  const onMedPress = (m: Med) => {
+    if (m.taken_today) setUndo(m);
+    else setMedTaken(m.id, true);
   };
 
   const nextDue = meds.find((m) => !m.taken_today);
@@ -102,10 +113,10 @@ export default function ElderHealth() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="elder-health">
-      <ScrollView contentContainerStyle={{ paddingBottom: 200 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.greeting}>{greeting}, {name}</Text>
-          <Text style={styles.sub}>Here&apos;s what you need today.</Text>
+          <AppText style={styles.greeting}>{greeting}, {name}</AppText>
+          <AppText style={styles.sub}>Here&apos;s what you need today.</AppText>
         </View>
 
         {/* Missed dose reminder */}
@@ -113,8 +124,8 @@ export default function ElderHealth() {
           <View style={styles.missedBanner} testID="missed-banner">
             <Ionicons name="alarm" size={24} color={theme.colors.error} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.missedTitle}>{missed.length} medicine{missed.length > 1 ? "s" : ""} not marked taken</Text>
-              <Text style={styles.missedSub}>Your family has been gently notified. Tap a medicine below to confirm.</Text>
+              <AppText style={styles.missedTitle}>{missed.length} medicine{missed.length > 1 ? "s" : ""} not marked taken</AppText>
+              <AppText style={styles.missedSub}>Tap the medicine below to confirm you took it.</AppText>
             </View>
           </View>
         )}
@@ -123,46 +134,92 @@ export default function ElderHealth() {
         {nextDue ? (
           <View style={styles.intake} testID="intake-prompt">
             <Image source={{ uri: nextDue.image }} style={styles.intakeImg} />
-            <Text style={styles.intakeQ}>Did you take your {nextDue.name}?</Text>
-            <Text style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</Text>
+            <AppText style={styles.intakeQ}>Did you take your {nextDue.name}?</AppText>
+            <AppText style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</AppText>
             <View style={styles.intakeBtns}>
-              <Pressable style={[styles.intakeBtn, styles.intakeYes]} onPress={() => takeMed(nextDue.id)} testID="intake-yes">
+              <Pressable
+                style={[styles.intakeBtn, styles.intakeYes]}
+                onPress={() => setMedTaken(nextDue.id, true)}
+                testID="intake-yes"
+                accessibilityRole="button"
+                accessibilityLabel={`Yes, I took my ${nextDue.name}`}
+              >
                 <Ionicons name="checkmark-circle" size={26} color="#fff" />
-                <Text style={styles.intakeYesText}>Yes, taken</Text>
+                <AppText style={styles.intakeYesText}>Yes, taken</AppText>
               </Pressable>
-              <Pressable style={[styles.intakeBtn, styles.intakeNot]} onPress={() => showToast("Okay, we'll remind you soon")} testID="intake-not">
-                <Text style={styles.intakeNotText}>Not yet</Text>
+              <Pressable
+                style={[styles.intakeBtn, styles.intakeNot]}
+                onPress={() => showToast("Okay, we'll remind you soon")}
+                testID="intake-not"
+                accessibilityRole="button"
+                accessibilityLabel="Not yet, remind me later"
+              >
+                <AppText style={styles.intakeNotText}>Not yet</AppText>
               </Pressable>
             </View>
+          </View>
+        ) : meds.length === 0 ? (
+          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-empty">
+            <Ionicons name="camera" size={54} color={theme.colors.marigoldDark} />
+            <AppText style={styles.intakeQ}>Let&apos;s add your medicines</AppText>
+            <AppText style={styles.intakeMeta}>
+              Take a photo of your prescription and we&apos;ll add them for you.
+            </AppText>
+            <Pressable
+              style={[styles.intakeBtn, styles.intakeYes, { alignSelf: "stretch", marginTop: 14 }]}
+              onPress={() => setOcr({ open: true })}
+              testID="empty-scan"
+              accessibilityRole="button"
+              accessibilityLabel="Scan a prescription to add your medicines"
+            >
+              <Ionicons name="camera" size={26} color="#fff" />
+              <AppText style={styles.intakeYesText}>Scan my prescription</AppText>
+            </Pressable>
           </View>
         ) : (
           <View style={[styles.intake, { alignItems: "center" }]} testID="intake-done">
             <Ionicons name="checkmark-done-circle" size={54} color={theme.colors.success} />
-            <Text style={styles.intakeQ}>All medicines taken today</Text>
-            <Text style={styles.intakeMeta}>Wonderful! Keep it up.</Text>
+            <AppText style={styles.intakeQ}>All medicines taken today</AppText>
+            <AppText style={styles.intakeMeta}>Wonderful! Keep it up.</AppText>
           </View>
         )}
 
         {/* Medicines list */}
         <View style={styles.sectionRow}>
-          <Text style={styles.section}>My Medicines</Text>
-          <Pressable style={styles.scanBtn} onPress={() => setOcr({ open: true })} testID="scan-prescription">
+          <AppText style={styles.section}>My Medicines</AppText>
+          <Pressable
+            style={styles.scanBtn}
+            onPress={() => setOcr({ open: true })}
+            testID="scan-prescription"
+            accessibilityRole="button"
+            accessibilityLabel="Scan a prescription"
+            accessibilityHint="Takes a photo of your prescription and adds the medicines for you"
+          >
             <Ionicons name="camera" size={20} color={theme.colors.brand} />
-            <Text style={styles.scanText}>Scan</Text>
+            <AppText style={styles.scanText}>Scan</AppText>
           </Pressable>
         </View>
         <View style={styles.medList}>
           {meds.map((m) => (
-            <Pressable key={m.id} style={styles.medCard} onPress={() => takeMed(m.id)} testID={`med-${m.id}`}>
+            <Pressable
+              key={m.id}
+              style={styles.medCard}
+              onPress={() => onMedPress(m)}
+              testID={`med-${m.id}`}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: m.taken_today }}
+              accessibilityLabel={`${m.name}, ${m.dose}, due ${m.time}`}
+              accessibilityHint={m.taken_today ? "Already confirmed today. Activate to undo." : "Activate to confirm you took it"}
+            >
               <Image source={{ uri: m.image }} style={styles.medImg} />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.medName, m.taken_today && styles.struck]}>{m.name}</Text>
-                <Text style={styles.medMeta}>{m.dose} • {m.time}</Text>
+                <AppText style={[styles.medName, m.taken_today && styles.struck]}>{m.name}</AppText>
+                <AppText style={styles.medMeta}>{m.dose} • {m.time}</AppText>
                 <View style={styles.stockRow}>
                   <Ionicons name={TYPE_ICON[m.type] || "ellipse"} size={14} color={m.low ? theme.colors.error : theme.colors.muted} />
-                  <Text style={[styles.stockText, m.low && { color: theme.colors.error, fontWeight: "700" }]}>
+                  <AppText style={[styles.stockText, m.low && { color: theme.colors.error, fontWeight: "700" }]}>
                     {m.low ? `Low — ${m.days_left} day${m.days_left === 1 ? "" : "s"} left` : `${m.stock} left`}
-                  </Text>
+                  </AppText>
                 </View>
               </View>
               <View style={[styles.check, m.taken_today && styles.checkOn]}>
@@ -173,29 +230,40 @@ export default function ElderHealth() {
         </View>
 
         {/* Appointments */}
-        <Text style={styles.section}>Appointments</Text>
+        <AppText style={styles.section}>Appointments</AppText>
+        {appts.length === 0 && (
+          <AppText style={styles.sectionEmpty} testID="appts-empty">
+            No appointments yet. Ask Sunshine below to book a doctor for you.
+          </AppText>
+        )}
         {appts.map((a) => (
           <View key={a.id} style={styles.apptCard} testID={`appt-${a.id}`}>
             <View style={styles.apptIcon}><Ionicons name="calendar" size={26} color={theme.colors.brand} /></View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.apptDoc}>{a.doctor}</Text>
-              <Text style={styles.apptSpec}>{a.specialty}</Text>
-              <Text style={styles.apptTime}>{a.date} • {a.time}</Text>
+              <AppText style={styles.apptDoc}>{a.doctor}</AppText>
+              <AppText style={styles.apptSpec}>{a.specialty}</AppText>
+              <AppText style={styles.apptTime}>{a.date} • {a.time}</AppText>
             </View>
           </View>
         ))}
 
         {/* Care actions */}
-        <Text style={styles.section}>Care & Concierge</Text>
+        <AppText style={styles.section}>Care & Concierge</AppText>
         <View style={styles.grid}>
           <GridBtn icon="repeat" label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
           <GridBtn icon="medkit" label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
           <GridBtn icon="car" label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
-          <GridBtn icon="call" label="Call doctor" onPress={() => router.push({ pathname: "/call", params: { name: "Dr. Sharma", who: "doctor" } })} />
         </View>
-        <Pressable style={styles.askConcierge} onPress={() => setConcierge({ open: true, text: "" })} testID="open-concierge">
+        <Pressable
+          style={styles.askConcierge}
+          onPress={() => setConcierge({ open: true, text: "" })}
+          testID="open-concierge"
+          accessibilityRole="button"
+          accessibilityLabel="Ask Sunshine to arrange something"
+          accessibilityHint="Sends a request to your family to arrange it for you"
+        >
           <Ionicons name="sparkles" size={22} color={theme.colors.marigoldDark} />
-          <Text style={styles.askConciergeText}>Ask Sunshine to arrange something</Text>
+          <AppText style={styles.askConciergeText}>Ask Sunshine to arrange something</AppText>
         </Pressable>
       </ScrollView>
 
@@ -205,43 +273,43 @@ export default function ElderHealth() {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => !ocr.busy && setOcr({ open: false })} />
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.handle} />
-            <Text style={styles.sheetTitle}>Scan a prescription</Text>
+            <AppText style={styles.sheetTitle}>Scan a prescription</AppText>
             {ocr.busy ? (
-              <View style={styles.ocrBusy}><ActivityIndicator size="large" color={theme.colors.brand} /><Text style={styles.sheetSub}>Reading your prescription...</Text></View>
+              <View style={styles.ocrBusy}><ActivityIndicator size="large" color={theme.colors.brand} /><AppText style={styles.sheetSub}>Reading your prescription...</AppText></View>
             ) : ocr.result ? (
               <View style={{ gap: 12, alignSelf: "stretch" }}>
                 <View style={styles.savedRow}>
                   <Ionicons name="lock-closed" size={16} color={theme.colors.success} />
-                  <Text style={styles.savedText}>Photo saved securely — your family can view it</Text>
+                  <AppText style={styles.savedText}>Photo saved securely — your family can view it</AppText>
                 </View>
                 {ocr.result.length > 0 ? (
                   <>
-                    <Text style={styles.sheetSub}>We found {ocr.result.length} medicine(s):</Text>
+                    <AppText style={styles.sheetSub}>We found {ocr.result.length} medicine(s):</AppText>
                     {ocr.result.map((m, i) => (
                       <View key={i} style={styles.ocrItem}>
                         <Ionicons name="checkmark-circle" size={22} color={theme.colors.success} />
-                        <Text style={styles.ocrItemText}>{m.name} {m.dose ? `• ${m.dose}` : ""} • {m.time}</Text>
+                        <AppText style={styles.ocrItemText}>{m.name} {m.dose ? `• ${m.dose}` : ""} • {m.time}</AppText>
                       </View>
                     ))}
-                    <Pressable style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><Text style={styles.primaryBtnText}>Add to my medicines</Text></Pressable>
+                    <Pressable style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><AppText style={styles.primaryBtnText}>Add to my medicines</AppText></Pressable>
                   </>
                 ) : (
                   <>
-                    <Text style={styles.sheetSub}>We couldn&apos;t read any medicines, but the photo is saved for your family to check.</Text>
-                    <Pressable style={styles.primaryBtn} onPress={() => setOcr({ open: false })}><Text style={styles.primaryBtnText}>Done</Text></Pressable>
+                    <AppText style={styles.sheetSub}>We couldn&apos;t read any medicines, but the photo is saved for your family to check.</AppText>
+                    <Pressable style={styles.primaryBtn} onPress={() => setOcr({ open: false })}><AppText style={styles.primaryBtnText}>Done</AppText></Pressable>
                   </>
                 )}
               </View>
             ) : ocr.error ? (
               <View style={{ gap: 12, alignItems: "center" }}>
-                <Text style={styles.sheetSub}>{ocr.error}</Text>
-                <Pressable style={styles.secondaryBtn} onPress={() => Linking.openSettings()}><Text style={styles.secondaryBtnText}>Open Settings</Text></Pressable>
+                <AppText style={styles.sheetSub}>{ocr.error}</AppText>
+                <Pressable style={styles.secondaryBtn} onPress={() => Linking.openSettings()}><AppText style={styles.secondaryBtnText}>Open Settings</AppText></Pressable>
               </View>
             ) : (
               <View style={{ gap: 12, alignSelf: "stretch" }}>
-                <Text style={styles.sheetSub}>Take a clear photo of your prescription and we&apos;ll add your medicines for you.</Text>
-                <Pressable style={styles.primaryBtn} onPress={() => capturePrescription(true)} testID="ocr-camera"><Ionicons name="camera" size={22} color="#fff" /><Text style={styles.primaryBtnText}>  Take a photo</Text></Pressable>
-                <Pressable style={styles.secondaryBtn} onPress={() => capturePrescription(false)} testID="ocr-gallery"><Text style={styles.secondaryBtnText}>Choose from gallery</Text></Pressable>
+                <AppText style={styles.sheetSub}>Take a clear photo of your prescription and we&apos;ll add your medicines for you.</AppText>
+                <Pressable style={styles.primaryBtn} onPress={() => capturePrescription(true)} testID="ocr-camera"><Ionicons name="camera" size={22} color="#fff" /><AppText style={styles.primaryBtnText}>  Take a photo</AppText></Pressable>
+                <Pressable style={styles.secondaryBtn} onPress={() => capturePrescription(false)} testID="ocr-gallery"><AppText style={styles.secondaryBtnText}>Choose from gallery</AppText></Pressable>
               </View>
             )}
           </View>
@@ -257,16 +325,16 @@ export default function ElderHealth() {
             {concierge.done ? (
               <View style={{ alignItems: "center", gap: 10 }}>
                 <View style={styles.sosDone}><Ionicons name="checkmark" size={40} color="#fff" /></View>
-                <Text style={styles.sheetTitle}>Request sent!</Text>
-                <Text style={styles.sheetSub}>&quot;{concierge.done}&quot; was sent to your family. They will arrange it and you can track it in your Profile.</Text>
-                <Pressable style={styles.primaryBtn} onPress={() => setConcierge({ open: false, text: "" })}><Text style={styles.primaryBtnText}>OK</Text></Pressable>
+                <AppText style={styles.sheetTitle}>Request sent!</AppText>
+                <AppText style={styles.sheetSub}>&quot;{concierge.done}&quot; was sent to your family. They will arrange it and you can track it in your Profile.</AppText>
+                <Pressable style={styles.primaryBtn} onPress={() => setConcierge({ open: false, text: "" })}><AppText style={styles.primaryBtnText}>OK</AppText></Pressable>
               </View>
             ) : (
               <View style={{ alignSelf: "stretch", gap: 12 }}>
-                <Text style={styles.sheetTitle}>What can we arrange?</Text>
+                <AppText style={styles.sheetTitle}>What can we arrange?</AppText>
                 <TextInput style={styles.input} placeholder="e.g. Book a taxi to the clinic tomorrow" placeholderTextColor={theme.colors.muted} value={concierge.text} onChangeText={(t) => setConcierge((c) => ({ ...c, text: t }))} multiline testID="concierge-input" />
                 <Pressable style={[styles.primaryBtn, (!concierge.text.trim() || concierge.busy) && { opacity: 0.5 }]} disabled={!concierge.text.trim() || concierge.busy} onPress={() => sendConcierge()} testID="concierge-send">
-                  <Text style={styles.primaryBtnText}>{concierge.busy ? "Sending..." : "Send to family"}</Text>
+                  <AppText style={styles.primaryBtnText}>{concierge.busy ? "Sending..." : "Send to family"}</AppText>
                 </Pressable>
               </View>
             )}
@@ -274,16 +342,56 @@ export default function ElderHealth() {
         </View>
       )}
 
-      {toast ? <View style={[styles.toast, { bottom: insets.bottom + 160 }]} testID="toast"><Text style={styles.toastText}>{toast}</Text></View> : null}
+      {/* Undoing a confirmed dose is deliberate, so a mis-tap can't erase it. */}
+      {undo && (
+        <View style={styles.backdrop} testID="undo-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setUndo(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <AppText style={styles.sheetTitle}>You already marked {undo.name} as taken</AppText>
+            <AppText style={styles.sheetSub}>Did you tap it by mistake?</AppText>
+            <Pressable
+              style={styles.secondaryBtn}
+              onPress={() => { setMedTaken(undo.id, false); setUndo(null); }}
+              testID="undo-confirm"
+              accessibilityRole="button"
+              accessibilityLabel={`Undo, I have not taken my ${undo.name}`}
+            >
+              <AppText style={styles.secondaryBtnText}>No, I haven&apos;t taken it</AppText>
+            </Pressable>
+            <Pressable
+              style={styles.primaryBtn}
+              onPress={() => setUndo(null)}
+              testID="undo-keep"
+              accessibilityRole="button"
+              accessibilityLabel="Keep it marked as taken"
+            >
+              <AppText style={styles.primaryBtnText}>Keep it, I took it</AppText>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {toast ? (
+        <View style={[styles.toast, { bottom: insets.bottom + 24 }]} testID="toast" accessibilityLiveRegion="polite">
+          <AppText style={styles.toastText}>{toast}</AppText>
+        </View>
+      ) : null}
     </View>
   );
 }
 
 function GridBtn({ icon, label, onPress }: any) {
   return (
-    <Pressable style={styles.gridBtn} onPress={onPress} testID={`grid-${label}`}>
+    <Pressable
+      style={styles.gridBtn}
+      onPress={onPress}
+      testID={`grid-${label}`}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
       <View style={styles.gridIcon}><Ionicons name={icon} size={28} color={theme.colors.brand} /></View>
-      <Text style={styles.gridLabel}>{label}</Text>
+      <AppText style={styles.gridLabel}>{label}</AppText>
     </Pressable>
   );
 }
@@ -323,6 +431,7 @@ const styles = StyleSheet.create({
   stockText: { fontSize: 14, color: theme.colors.muted },
   check: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: theme.colors.borderStrong, alignItems: "center", justifyContent: "center" },
   checkOn: { backgroundColor: theme.colors.success, borderColor: theme.colors.success },
+  sectionEmpty: { fontSize: theme.font.sm, color: theme.colors.muted, paddingHorizontal: 20, lineHeight: 22, marginTop: -4, marginBottom: 4 },
   apptCard: { flexDirection: "row", gap: 14, marginHorizontal: 20, marginBottom: 12, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: theme.colors.border },
   apptIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
   apptDoc: { fontSize: 19, fontWeight: "800", color: theme.colors.onSurface },

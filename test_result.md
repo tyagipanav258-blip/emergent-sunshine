@@ -101,3 +101,191 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+## user_problem_statement: |
+  Apply the fixes from the product/design audit of Sunshine (SUN-01 … SUN-11):
+  the SOS button asserting delivery it never performed, adherence dying on day two,
+  new accounts alarming the family, invented relatives, floating buttons covering
+  content, a dead accessibility toggle, an unshareable family code, unauthenticated
+  AI endpoints, and an unthrottled 4-digit PIN.
+
+## backend:
+  - task: "Dated dose ledger replacing the taken_today boolean"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Adherence now lives in an `intakes` collection, one row per medicine per
+            local day with `taken_at`. "taken_today" is derived, never stored, so it
+            resets itself at the elder's midnight with no job. Confirming twice is a
+            no-op; undoing is an explicit {"taken": false}. Verified: stock moves once
+            (6 -> 4 across two confirms), and an intake dated to a past day no longer
+            counts as today's.
+
+  - task: "Elder-local timezone, no seeded demo data, alerts gated on a real intake"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Elders store an IANA timezone captured from the device at signup
+            (default Asia/Kolkata); every schedule, greeting and day boundary is
+            computed in it. `_seed_elder_data` deleted — new accounts start empty
+            and the app opens on the prescription-scan empty state. A medicine only
+            becomes alertable after its first confirmed intake, so a newly added
+            medicine cannot alarm the family. Location is no longer hardcoded to
+            Bengaluru. Verified: a fresh account shows zero medicines, zero
+            appointments and zero alerts on both sides.
+
+  - task: "Honest SOS, real family graph, missed-dose sweep off the read path"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            /sos resolves contacts from the family graph, writes a notification per
+            contact, and returns {delivered, contacts_notified, emergency_number}.
+            With nobody connected it says so and offers 112 instead of claiming
+            "help is on the way". Same for /im-okay. FAMILY_STORIES and the voice
+            agent's hardcoded NAMES are gone; /family-stories is replaced by /family.
+            Missed-dose notifications moved to a 15-minute background sweep, so GET
+            handlers no longer write. Verified end to end: alone -> delivered=false;
+            after a child joins -> delivered=true, contacts=["Priya Sharma"].
+
+  - task: "Auth on AI endpoints, PIN throttling, scoped image tokens"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            /assistant/chat, /assistant/history and /voice/ask now require auth, and
+            chat history is scoped to the authenticated user (a guessed session id
+            returns nothing; hijacking one 403s). Elder PIN login backs off after 5
+            failures with a 15-minute lockout. JWT default cut from 30 days to 7.
+            Prescription images prefer the Authorization header; the query-string
+            fallback is a 10-minute token scoped to `prescription_image`, and
+            current_user rejects any scoped token so it cannot be replayed as a
+            session.
+
+## frontend:
+  - task: "Working text-size setting and applied type tokens"
+    implemented: true
+    working: true
+    file: "frontend/src/text-scale.tsx, frontend/src/components/AppText.tsx, frontend/src/theme.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            The dead "Larger text" switch is replaced by a persisted three-step
+            control (Normal / Large / Largest). AppText scales whatever size a style
+            declares, so all 15 screens scale together. theme.ts now carries the real
+            type scale. Verified by screenshot: selecting Largest visibly enlarges
+            every element on the screen.
+
+  - task: "Floating buttons moved into reserved chrome; SOS confirmation"
+    implemented: true
+    working: true
+    file: "frontend/app/(elder)/_layout.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            The assistant and SOS buttons now sit in an opaque action bar above the
+            tab bar instead of floating over content. Verified on all four tabs — the
+            Watch description and the Health medicine cards are fully readable again,
+            and SOS is no longer adjacent to Share. SOS asks "Do you need help?" with
+            a cancel before firing, and the result sheet reports only what happened,
+            with a one-tap Call 112 button.
+
+  - task: "Real family data, invite sharing, deep link"
+    implemented: true
+    working: true
+    file: "frontend/app/(elder)/index.tsx, frontend/app/(elder)/profile.tsx, frontend/app/join.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            The invented Family Updates ring and Stay Connected contacts are gone,
+            replaced by the real family graph with invite empty states. The family
+            code now has Invite (share sheet) and Copy buttons, and the invite carries
+            a sunshine://join?code=... deep link that pre-fills child signup.
+
+  - task: "Accessibility labels across all interactive controls"
+    implemented: true
+    working: true
+    file: "frontend/app/**"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Went from zero accessibility props to ~96 across 11 screens: roles, labels
+            and hints on every icon-only control (SOS, assistant, medicine checkboxes,
+            keypad, reels rail, call controls, task actions), plus live regions on
+            errors, toasts and the family alert box.
+
+## metadata:
+  created_by: "main_agent"
+  version: "2.0"
+  test_sequence: 1
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Dated dose ledger replacing the taken_today boolean"
+    - "Honest SOS, real family graph, missed-dose sweep off the read path"
+    - "Auth on AI endpoints, PIN throttling, scoped image tokens"
+  stuck_tasks: []
+  test_all: true
+  test_priority: "high_first"
+
+## agent_communication:
+    - agent: "main"
+      message: |
+        Applied all 11 audit findings. Verification run locally: 58/58 API assertions
+        pass, tsc clean, eslint clean, `expo export --platform web` succeeds, and both
+        roles were driven through Chromium with zero runtime errors.
+
+        Caveat for the testing agent: the LLM calls could not be exercised here —
+        `emergentintegrations` and `litellm` are private wheels this environment
+        cannot reach, so OCR, concierge classification and the voice agent ran against
+        a stub. Their routing, persistence, auth and error paths are covered; only the
+        model's own wording is unverified. Please re-run those against the preview URL.
+
+        Two contract changes the suite depends on:
+        1. POST /health/medicines/{id}/take takes an optional {"taken": bool}. It is
+           idempotent — a second confirm no longer undoes the dose.
+        2. GET /family-stories is removed; GET /family returns the real members.
+        Existing tests in backend/tests were updated for both, plus auth headers on
+        the assistant endpoints and the removal of the invented Priya/Rahul cast.
