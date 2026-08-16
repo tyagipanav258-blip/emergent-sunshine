@@ -23,6 +23,7 @@ from pwdlib import PasswordHash
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+from emergentintegrations.llm.openai.text_to_speech import OpenAITextToSpeech
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -789,16 +790,21 @@ AGENT_SYS = (
     "You can DO things in her app. Read her request and choose ONE intent, then reply in ONE short warm spoken sentence. "
     "Return ONLY JSON with these keys: "
     "reply (string, one short kind sentence spoken back to her), "
-    "intent (one of: call, notify, mark_medicine, order_medicine, book_doctor, arrange_transport, im_okay, sos, answer), "
+    "intent (one of: call, notify, mark_medicine, add_medicine, voice_note, order_medicine, book_doctor, arrange_transport, im_okay, sos, answer), "
     "target (one of: daughter, son, doctor, or null), "
-    "medicine (the medicine name she mentioned, or null), "
+    "medicine (the medicine name, or null), "
+    "dose (e.g. '500 mg' or '1 tablet', or null), "
+    "time (e.g. '9:00 PM', or null), "
+    "med_type (one of tablet, capsule, syrup, drops, or null), "
+    "per_day (integer number of times per day, or null), "
     "message (text to send if intent is notify, else null), "
     "details (any extra detail for a request, or null). "
-    "Meaning of intents: call=start a video/phone call to target; notify=send a message to target; "
-    "mark_medicine=mark a medicine as taken; order_medicine=arrange a medicine refill; book_doctor=arrange a doctor consultation; "
-    "arrange_transport=arrange a taxi/transport; im_okay=reassure family she is fine; sos=emergency, alert family; answer=just answer her question. "
+    "Meaning of intents: call=start a call to target; notify=send a text message to target; "
+    "mark_medicine=mark an existing medicine as taken; add_medicine=add a NEW medicine to her list (she says its name, dose and time); "
+    "voice_note=record and send a voice note to target; order_medicine=arrange a medicine refill; book_doctor=arrange a doctor consultation; "
+    "arrange_transport=arrange a taxi; im_okay=reassure family; sos=emergency alert; answer=just answer her question. "
     "People: daughter is Priya, son is Rahul, doctor is Dr. Sharma. "
-    "If it is a general question, use intent 'answer' and put the helpful answer in 'reply'. No emojis, no jargon."
+    "If it is a general question, use intent 'answer'. No emojis, no jargon."
 )
 NAMES = {"daughter": "Priya", "son": "Rahul", "doctor": "Dr. Sharma"}
 
@@ -814,7 +820,7 @@ async def _transcribe_audio(audio: bytes, ext: str) -> str:
 async def _run_agent(elder: dict, message: str) -> dict:
     """LLM decides an intent; backend executes data actions and returns a result."""
     eid = elder["id"]
-    parsed = {"reply": "", "intent": "answer", "target": None, "medicine": None, "message": None, "details": None}
+    parsed = {"reply": "", "intent": "answer", "target": None, "medicine": None, "dose": None, "time": None, "med_type": None, "per_day": None, "message": None, "details": None}
     try:
         chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}", system_message=AGENT_SYS).with_model(*AGENT_MODEL)
         raw = str(await chat.send_message(UserMessage(text=message)))
@@ -832,15 +838,43 @@ async def _run_agent(elder: dict, message: str) -> dict:
     executed = None
 
     if intent == "call" and target:
-        action = {"type": "call", "target": target, "target_name": NAMES[target]}
+        action = {"type": "call", "target": target, "target_name": NAMES[target], "confirm": True}
         if not reply:
-            reply = f"Calling {NAMES[target]} now."
+            reply = f"Shall I call {NAMES[target]}? Tap Yes to confirm."
+    elif intent == "sos":
+        action = {"type": "sos", "confirm": True}
+        if not reply:
+            reply = "Do you need emergency help? Tap Yes and I'll alert your family and doctor."
     elif intent == "notify" and target:
         msg = parsed.get("message") or "Hello from Kamala!"
         await db.notifications.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "to": target, "message": msg, "from_role": "elder", "kind": "message", "at": datetime.now(timezone.utc).isoformat()})
         executed = f"Message sent to {NAMES[target]}"
         if not reply:
             reply = f"I've sent your message to {NAMES[target]}."
+    elif intent == "voice_note" and target:
+        action = {"type": "voice_note", "target": target, "target_name": NAMES[target]}
+        if not reply:
+            reply = f"Sure. Record your voice note for {NAMES[target]} now."
+    elif intent == "add_medicine":
+        name = (parsed.get("medicine") or "").strip()
+        if name:
+            mtype = parsed.get("med_type") if parsed.get("med_type") in MED_IMAGES else "tablet"
+            try:
+                per_day = int(parsed.get("per_day") or 1)
+            except Exception:
+                per_day = 1
+            m = {
+                "id": str(uuid.uuid4()), "elder_id": eid, "name": name[:60],
+                "dose": (parsed.get("dose") or "").strip()[:40], "time": (parsed.get("time") or "8:00 AM").strip()[:20],
+                "type": mtype, "per_day": max(per_day, 1), "stock": 30, "taken_today": False,
+                "image": MED_IMAGES.get(mtype, MED_IMAGES["tablet"]),
+            }
+            await db.medicines.insert_one(m.copy())
+            executed = f"Added {name} to your medicines"
+            if not reply:
+                reply = f"I've added {name} to your medicines at {m['time']}."
+        else:
+            reply = reply or "What is the name of the medicine you'd like to add?"
     elif intent == "mark_medicine":
         wanted = (parsed.get("medicine") or "").lower().strip()
         meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
@@ -877,12 +911,6 @@ async def _run_agent(elder: dict, message: str) -> dict:
         executed = "Your family has been reassured"
         if not reply:
             reply = "I've let your family know you are doing well."
-    elif intent == "sos":
-        await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "type": "sos", "at": datetime.now(timezone.utc).isoformat()})
-        action = {"type": "sos"}
-        executed = "Family and doctor alerted"
-        if not reply:
-            reply = "Stay calm. I've alerted your family and doctor right away."
     else:
         if not reply:
             reply = "I'm here to help. You can ask me to call family, send a message, mark medicines, or arrange things."
