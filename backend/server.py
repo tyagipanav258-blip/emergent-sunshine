@@ -11,8 +11,10 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Literal
 
 import jwt
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+import requests
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -37,6 +39,42 @@ OPENAI_MINI = ("openai", "gpt-5.4-mini")
 
 pwd = PasswordHash.recommended()
 bearer = HTTPBearer(auto_error=False)
+
+# ============================ OBJECT STORAGE ============================
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+APP_NAME = "sunshine"
+_storage_key = None
+
+
+def init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    global _storage_key
+    key = init_storage()
+    resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    if resp.status_code == 503:
+        _storage_key = None
+        key = init_storage()
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    global _storage_key
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 app = FastAPI()
 api = APIRouter(prefix="/api")
@@ -113,6 +151,57 @@ def require_role(role: str):
 
 async def elder_id_for(u: dict) -> str:
     return u["id"] if u["role"] == "elder" else u.get("elder_id")
+
+
+async def user_from_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    if not u:
+        raise HTTPException(401, "User not found")
+    return u
+
+
+def _parse_time(t: str) -> int:
+    """'8:00 AM' -> minutes since midnight. Returns 24*60 if unparseable."""
+    m = re.match(r"\s*(\d{1,2}):(\d{2})\s*([AaPp][Mm])?", t or "")
+    if not m:
+        return 24 * 60
+    hh, mm = int(m.group(1)), int(m.group(2))
+    ap = (m.group(3) or "").upper()
+    if ap == "PM" and hh != 12:
+        hh += 12
+    if ap == "AM" and hh == 12:
+        hh = 0
+    return hh * 60 + mm
+
+
+async def _compute_missed(elder_id: str) -> List[dict]:
+    """A dose is missed if its time has passed today and it's not taken.
+    Creates a de-duplicated notification to family (one per med per day)."""
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    now_min = now.hour * 60 + now.minute
+    meds = await db.medicines.find({"elder_id": elder_id}, {"_id": 0}).to_list(100)
+    missed = []
+    for m in meds:
+        if m.get("taken_today"):
+            continue
+        due = _parse_time(m["time"])
+        # 30-minute grace after scheduled time
+        if now_min > due + 30:
+            missed.append({"id": m["id"], "name": m["name"], "dose": m["dose"], "time": m["time"], "image": m["image"]})
+            existing = await db.notifications.find_one({"elder_id": elder_id, "kind": "missed_dose", "med_id": m["id"], "day": today})
+            if not existing:
+                await db.notifications.insert_one({
+                    "id": str(uuid.uuid4()), "elder_id": elder_id, "kind": "missed_dose", "med_id": m["id"],
+                    "day": today, "to": "family",
+                    "message": f"{m['name']} ({m['time']}) was not marked as taken.",
+                    "at": datetime.now(timezone.utc).isoformat(), "read": False,
+                })
+    return missed
 
 
 @api.post("/auth/elder/signup")
@@ -300,6 +389,7 @@ async def health_overview(u: dict = Depends(current_user)):
     greeting = "Good morning" if hour < 12 else "Good afternoon" if hour < 17 else "Good evening"
     elder = await db.users.find_one({"id": eid}, {"_id": 0})
     med_views = [_med_view(m) for m in meds]
+    missed = await _compute_missed(eid)
     return {
         "greeting": greeting,
         "name": (elder or {}).get("name", "there").split(" ")[0],
@@ -307,6 +397,7 @@ async def health_overview(u: dict = Depends(current_user)):
         "appointments": appts,
         "medicines_due": sum(1 for m in med_views if not m["taken_today"]),
         "low_stock": [m for m in med_views if m["low"]],
+        "missed": missed,
     }
 
 
@@ -388,6 +479,90 @@ async def prescription_ocr(b: OCRIn, u: dict = Depends(require_role("elder"))):
             "per_day": int(it.get("per_day", 1) or 1),
         })
     return {"medicines": [c for c in clean if c["name"]]}
+
+
+async def _ocr_extract(img_b64: str) -> list:
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY, session_id=f"ocr-{uuid.uuid4()}",
+        system_message=(
+            "You read a photo of a medical prescription. Extract the medicines. "
+            "Return ONLY a JSON array. Each item: {\"name\": str, \"dose\": str, "
+            "\"time\": str (e.g. '8:00 AM'), \"type\": one of tablet|capsule|syrup|drops, "
+            "\"per_day\": int}. If unreadable, return []."
+        ),
+    ).with_model(*GEMINI)
+    msg = UserMessage(text="Extract the medicines from this prescription.", file_contents=[ImageContent(image_base64=img_b64)])
+    raw = str(await chat.send_message(msg))
+    mm = re.search(r"\[.*\]", raw, re.S)
+    meds = json.loads(mm.group(0)) if mm else []
+    clean = []
+    for it in meds[:10]:
+        if not str(it.get("name", "")).strip():
+            continue
+        clean.append({
+            "name": str(it.get("name", "")).strip()[:60],
+            "dose": str(it.get("dose", "")).strip()[:40],
+            "time": str(it.get("time", "8:00 AM")).strip()[:20],
+            "type": it.get("type") if it.get("type") in MED_IMAGES else "tablet",
+            "per_day": int(it.get("per_day", 1) or 1),
+        })
+    return clean
+
+
+@api.post("/health/prescriptions")
+async def scan_and_store_prescription(b: OCRIn, u: dict = Depends(require_role("elder"))):
+    """Store the prescription photo securely in object storage, run OCR, save record."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    img = b.image_base64
+    if "," in img and img.strip().startswith("data:"):
+        img = img.split(",", 1)[1]
+    try:
+        raw_bytes = base64.b64decode(img)
+    except Exception:
+        raise HTTPException(400, "Invalid image data")
+
+    pid = str(uuid.uuid4())
+    storage_path = f"{APP_NAME}/uploads/{u['id']}/{pid}.jpg"
+    try:
+        await run_in_threadpool(put_object, storage_path, raw_bytes, "image/jpeg")
+    except Exception as e:
+        logger.exception("prescription upload failed")
+        raise HTTPException(502, f"Could not save the photo: {e}")
+
+    try:
+        meds = await _ocr_extract(img)
+    except Exception:
+        logger.exception("prescription ocr failed")
+        meds = []
+
+    doc = {
+        "id": pid, "elder_id": u["id"], "storage_path": storage_path,
+        "medicines": meds, "created_at": datetime.now(timezone.utc).isoformat(), "deleted": False,
+    }
+    await db.prescriptions.insert_one(doc.copy())
+    return {"id": pid, "medicines": meds}
+
+
+@api.get("/prescriptions")
+async def list_prescriptions(u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    docs = await db.prescriptions.find({"elder_id": eid, "deleted": {"$ne": True}}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return [{"id": d["id"], "medicines": d["medicines"], "created_at": d["created_at"]} for d in docs]
+
+
+@api.get("/prescriptions/{pid}/image")
+async def prescription_image(pid: str, token: str = Query(...)):
+    u = await user_from_token(token)
+    eid = await elder_id_for(u)
+    doc = await db.prescriptions.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(404, "Prescription not found")
+    try:
+        content, ctype = await run_in_threadpool(get_object, doc["storage_path"])
+    except Exception:
+        raise HTTPException(404, "Image not available")
+    return Response(content=content, media_type=ctype)
 
 
 # ============================ CONCIERGE / TASKS ============================
@@ -503,6 +678,8 @@ async def child_analytics(u: dict = Depends(require_role("child"))):
     med_views = [_med_view(m) for m in meds]
     appts = await db.appointments.find({"elder_id": eid}, {"_id": 0}).to_list(100)
     pending = await db.tasks.count_documents({"elder_id": eid, "status": {"$in": ["requested"]}})
+    missed = await _compute_missed(eid)
+    alerts = await db.notifications.find({"elder_id": eid, "kind": "missed_dose"}, {"_id": 0}).sort("at", -1).to_list(20)
     return {
         "elder_name": elder["name"],
         "location": elder.get("location", "Unknown"),
@@ -513,6 +690,8 @@ async def child_analytics(u: dict = Depends(require_role("child"))):
         "low_stock_count": sum(1 for m in med_views if m["low"]),
         "appointments": appts,
         "pending_tasks": pending,
+        "missed_doses": missed,
+        "alerts": [{"message": a["message"], "at": a["at"], "day": a.get("day")} for a in alerts],
     }
 
 
@@ -559,12 +738,42 @@ async def assistant_chat(b: AssistantChatIn):
     chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=sid, system_message=ASSISTANT_SYS).with_model(*GEMINI)
     prompt = f"Our chat so far:\n{ctx}\n\nThey now say: {msg}\n\nReply warmly as Sunshine." if ctx else msg
     answer = str(await chat.send_message(UserMessage(text=prompt))).strip()
+    action = await _detect_action(msg)
     now = datetime.now(timezone.utc).isoformat()
     await db.assistant_messages.insert_many([
         {"id": str(uuid.uuid4()), "session_id": sid, "role": "user", "text": msg, "created_at": now},
         {"id": str(uuid.uuid4()), "session_id": sid, "role": "assistant", "text": answer, "created_at": now},
     ])
-    return {"session_id": sid, "answer": answer}
+    return {"session_id": sid, "answer": answer, "action": action}
+
+
+async def _detect_action(message: str) -> Optional[dict]:
+    """Detect if the user wants to call or message a family member/doctor."""
+    if not EMERGENT_LLM_KEY:
+        return None
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"act-{uuid.uuid4()}",
+            system_message=(
+                "Decide if the user wants to CALL someone or SEND A MESSAGE to someone. "
+                "People allowed: daughter (Priya), son (Rahul), doctor (Dr. Sharma). "
+                "Return ONLY JSON: {\"type\": one of none|call|message, "
+                "\"target\": one of daughter|son|doctor|null, "
+                "\"message\": the message text if type is message else null}. "
+                "If it is just a question or chit-chat, return {\"type\":\"none\",\"target\":null,\"message\":null}."
+            ),
+        ).with_model(*OPENAI_MINI)
+        raw = str(await chat.send_message(UserMessage(text=message)))
+        mm = re.search(r"\{.*\}", raw, re.S)
+        if not mm:
+            return None
+        parsed = json.loads(mm.group(0))
+        if parsed.get("type") in {"call", "message"} and parsed.get("target") in {"daughter", "son", "doctor"}:
+            names = {"daughter": "Priya", "son": "Rahul", "doctor": "Dr. Sharma"}
+            return {"type": parsed["type"], "target": parsed["target"], "target_name": names[parsed["target"]], "message": parsed.get("message")}
+    except Exception:
+        logger.exception("_detect_action failed")
+    return None
 
 @api.get("/assistant/history")
 async def assistant_history(session_id: str):
@@ -579,6 +788,15 @@ async def root():
 
 app.include_router(api)
 app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        await run_in_threadpool(init_storage)
+        logger.info("Object storage initialized")
+    except Exception:
+        logger.exception("Object storage init failed (will retry on first upload)")
 
 
 @app.on_event("shutdown")

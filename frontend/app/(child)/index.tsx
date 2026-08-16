@@ -4,14 +4,14 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { apiFetch } from "@/src/api";
+import { apiFetch, getToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { theme } from "@/src/theme";
+import { theme, API } from "@/src/theme";
 
 type Analytics = {
   elder_name: string; location: string; last_active: string | null;
   most_used_feature: string; medicines: any[]; low_stock_count: number;
-  appointments: any[]; pending_tasks: number;
+  appointments: any[]; pending_tasks: number; missed_doses: any[]; alerts: any[];
 };
 
 function timeAgo(iso: string | null): string {
@@ -28,11 +28,21 @@ export default function ChildDashboard() {
   const router = useRouter();
   const { user } = useAuth();
   const [data, setData] = useState<Analytics | null>(null);
+  const [prescriptions, setPrescriptions] = useState<any[]>([]);
+  const [token, setTkn] = useState("");
+  const [viewer, setViewer] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
-    try { setData(await apiFetch<Analytics>("/child/analytics")); } catch {}
+    try {
+      const [a, pres, t] = await Promise.all([
+        apiFetch<Analytics>("/child/analytics"),
+        apiFetch<any[]>("/prescriptions").catch(() => []),
+        getToken(),
+      ]);
+      setData(a); setPrescriptions(pres); setTkn(t);
+    } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
 
@@ -60,6 +70,22 @@ export default function ChildDashboard() {
             <Text style={styles.bannerSub}><Ionicons name="location" size={14} color={theme.colors.muted} /> {data?.location}</Text>
           </View>
         </View>
+
+        {/* Missed-dose alerts */}
+        {data?.alerts && data.alerts.length > 0 && (
+          <View style={styles.alertsBox} testID="missed-alerts">
+            <View style={styles.alertsHead}>
+              <Ionicons name="notifications" size={20} color={theme.colors.error} />
+              <Text style={styles.alertsTitle}>Missed-dose alerts</Text>
+            </View>
+            {data.alerts.slice(0, 4).map((a, i) => (
+              <View key={i} style={styles.alertRow}>
+                <View style={styles.alertDot} />
+                <Text style={styles.alertText}>{a.message}</Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Stat grid */}
         <View style={styles.grid}>
@@ -107,11 +133,41 @@ export default function ChildDashboard() {
           ))}
         </View>
 
+        {/* Prescriptions */}
+        {prescriptions.length > 0 && (
+          <>
+            <Text style={styles.section}>Prescriptions</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }}>
+              {prescriptions.map((p) => {
+                const url = `${API}/prescriptions/${p.id}/image?token=${token}`;
+                return (
+                  <Pressable key={p.id} style={styles.presCard} onPress={() => setViewer(url)} testID={`prescription-${p.id}`}>
+                    <Image source={{ uri: url }} style={styles.presImg} contentFit="cover" />
+                    <View style={styles.presMeta}>
+                      <Ionicons name="document-text" size={14} color={theme.colors.brand} />
+                      <Text style={styles.presMetaText}>{p.medicines?.length || 0} med(s)</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </>
+        )}
+
         <Pressable style={styles.callParent} onPress={() => router.push({ pathname: "/call", params: { name: data?.elder_name || "Parent", who: "daughter" } })} testID="call-parent">
           <Ionicons name="videocam" size={22} color="#fff" />
           <Text style={styles.callParentText}>Video call {data?.elder_name?.split(" ")[0]}</Text>
         </Pressable>
       </ScrollView>
+
+      {viewer && (
+        <View style={styles.viewer} testID="prescription-viewer">
+          <Image source={{ uri: viewer }} style={styles.viewerImg} contentFit="contain" />
+          <Pressable style={[styles.viewerClose, { top: insets.top + 12 }]} onPress={() => setViewer(null)} testID="viewer-close" hitSlop={12}>
+            <Ionicons name="close" size={32} color="#fff" />
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -155,4 +211,17 @@ const styles = StyleSheet.create({
   confirmedText: { color: theme.colors.success, fontSize: 13, fontWeight: "800" },
   callParent: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginHorizontal: 20, marginTop: 24, backgroundColor: theme.colors.brand, borderRadius: 999, paddingVertical: 18 },
   callParentText: { color: "#fff", fontSize: 18, fontWeight: "800" },
+  alertsBox: { marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.error + "12", borderRadius: 20, padding: 16, borderWidth: 1.5, borderColor: theme.colors.error + "44", gap: 8 },
+  alertsHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  alertsTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.error },
+  alertRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  alertDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.error },
+  alertText: { fontSize: 15, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+  presCard: { width: 120, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border },
+  presImg: { width: 120, height: 130, backgroundColor: theme.colors.surfaceTertiary },
+  presMeta: { flexDirection: "row", alignItems: "center", gap: 6, padding: 10 },
+  presMetaText: { fontSize: 13, fontWeight: "700", color: theme.colors.onSurface },
+  viewer: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.94)", alignItems: "center", justifyContent: "center" },
+  viewerImg: { width: "92%", height: "80%" },
+  viewerClose: { position: "absolute", right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
 });

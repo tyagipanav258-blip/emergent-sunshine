@@ -19,6 +19,7 @@ export default function ElderHealth() {
   const router = useRouter();
   const [meds, setMeds] = useState<Med[]>([]);
   const [appts, setAppts] = useState<Appt[]>([]);
+  const [missed, setMissed] = useState<any[]>([]);
   const [greeting, setGreeting] = useState("Hello");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -29,7 +30,7 @@ export default function ElderHealth() {
   const load = useCallback(async () => {
     try {
       const d = await apiFetch<any>("/health/overview");
-      setMeds(d.medicines); setAppts(d.appointments); setGreeting(d.greeting); setName(d.name);
+      setMeds(d.medicines); setAppts(d.appointments); setGreeting(d.greeting); setName(d.name); setMissed(d.missed || []);
     } catch {}
     setLoading(false);
   }, []);
@@ -65,7 +66,7 @@ export default function ElderHealth() {
         : await ImagePicker.launchImageLibraryAsync({ base64: true, quality: 0.6, allowsEditing: true });
       if (res.canceled || !res.assets?.[0]?.base64) { setOcr({ open: false }); return; }
       setOcr({ open: true, busy: true });
-      const out = await apiFetch<any>("/health/ocr", { method: "POST", body: { image_base64: res.assets[0].base64 } });
+      const out = await apiFetch<any>("/health/prescriptions", { method: "POST", body: { image_base64: res.assets[0].base64 } });
       setOcr({ open: true, result: out.medicines });
     } catch (e: any) {
       setOcr({ open: true, error: e.message || "Could not read the prescription." });
@@ -106,6 +107,17 @@ export default function ElderHealth() {
           <Text style={styles.greeting}>{greeting}, {name}</Text>
           <Text style={styles.sub}>Here&apos;s what you need today.</Text>
         </View>
+
+        {/* Missed dose reminder */}
+        {missed.length > 0 && (
+          <View style={styles.missedBanner} testID="missed-banner">
+            <Ionicons name="alarm" size={24} color={theme.colors.error} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.missedTitle}>{missed.length} medicine{missed.length > 1 ? "s" : ""} not marked taken</Text>
+              <Text style={styles.missedSub}>Your family has been gently notified. Tap a medicine below to confirm.</Text>
+            </View>
+          </View>
+        )}
 
         {/* Intake prompt */}
         {nextDue ? (
@@ -198,14 +210,27 @@ export default function ElderHealth() {
               <View style={styles.ocrBusy}><ActivityIndicator size="large" color={theme.colors.brand} /><Text style={styles.sheetSub}>Reading your prescription...</Text></View>
             ) : ocr.result ? (
               <View style={{ gap: 12, alignSelf: "stretch" }}>
-                <Text style={styles.sheetSub}>We found {ocr.result.length} medicine(s):</Text>
-                {ocr.result.map((m, i) => (
-                  <View key={i} style={styles.ocrItem}>
-                    <Ionicons name="checkmark-circle" size={22} color={theme.colors.success} />
-                    <Text style={styles.ocrItemText}>{m.name} {m.dose ? `• ${m.dose}` : ""} • {m.time}</Text>
-                  </View>
-                ))}
-                <Pressable style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><Text style={styles.primaryBtnText}>Add to my medicines</Text></Pressable>
+                <View style={styles.savedRow}>
+                  <Ionicons name="lock-closed" size={16} color={theme.colors.success} />
+                  <Text style={styles.savedText}>Photo saved securely — your family can view it</Text>
+                </View>
+                {ocr.result.length > 0 ? (
+                  <>
+                    <Text style={styles.sheetSub}>We found {ocr.result.length} medicine(s):</Text>
+                    {ocr.result.map((m, i) => (
+                      <View key={i} style={styles.ocrItem}>
+                        <Ionicons name="checkmark-circle" size={22} color={theme.colors.success} />
+                        <Text style={styles.ocrItemText}>{m.name} {m.dose ? `• ${m.dose}` : ""} • {m.time}</Text>
+                      </View>
+                    ))}
+                    <Pressable style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><Text style={styles.primaryBtnText}>Add to my medicines</Text></Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.sheetSub}>We couldn&apos;t read any medicines, but the photo is saved for your family to check.</Text>
+                    <Pressable style={styles.primaryBtn} onPress={() => setOcr({ open: false })}><Text style={styles.primaryBtnText}>Done</Text></Pressable>
+                  </>
+                )}
               </View>
             ) : ocr.error ? (
               <View style={{ gap: 12, alignItems: "center" }}>
@@ -270,6 +295,11 @@ const styles = StyleSheet.create({
   greeting: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface },
   sub: { fontSize: 17, color: theme.colors.muted, marginTop: 4 },
   intake: { marginHorizontal: 20, backgroundColor: theme.colors.marigoldLight, borderRadius: 28, padding: 24, alignItems: "center", gap: 6, borderWidth: 2, borderColor: theme.colors.marigold },
+  missedBanner: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20, marginBottom: 14, backgroundColor: theme.colors.error + "16", borderRadius: 20, padding: 16, borderWidth: 1.5, borderColor: theme.colors.error + "55" },
+  missedTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.error },
+  missedSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 19 },
+  savedRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: theme.colors.brandLight, borderRadius: 12, padding: 10 },
+  savedText: { fontSize: 14, fontWeight: "700", color: theme.colors.success, flex: 1 },
   intakeImg: { width: 64, height: 64, borderRadius: 16, marginBottom: 4 },
   intakeQ: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   intakeMeta: { fontSize: 16, color: theme.colors.onSurfaceSecondary },

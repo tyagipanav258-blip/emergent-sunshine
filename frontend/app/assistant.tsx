@@ -20,13 +20,14 @@ import { theme, API } from "@/src/theme";
 
 const SESSION_KEY = "sunshine_assistant_session";
 
-type Msg = { role: "user" | "assistant"; text: string };
+type Action = { type: "call" | "message"; target: string; target_name: string; message?: string | null } | null;
+type Msg = { role: "user" | "assistant"; text: string; action?: Action; actionDone?: string };
 
 const SUGGESTIONS = [
+  "Call my daughter Priya",
+  "Tell my son I had lunch",
   "Suggest a light dinner",
   "How do I stay safe from scams?",
-  "A gentle exercise for my knees",
-  "Help me video call my daughter",
 ];
 
 export default function AssistantScreen() {
@@ -80,7 +81,7 @@ export default function AssistantScreen() {
           setSessionId(data.session_id);
           await storage.setItem(SESSION_KEY, data.session_id);
         }
-        setMessages((prev) => [...prev, { role: "assistant", text: data.answer || "Sorry, I couldn't answer that." }]);
+        setMessages((prev) => [...prev, { role: "assistant", text: data.answer || "Sorry, I couldn't answer that.", action: data.action || null }]);
       } catch {
         setMessages((prev) => [...prev, { role: "assistant", text: "Sorry, I'm having trouble right now. Please try again in a moment." }]);
       } finally {
@@ -97,6 +98,24 @@ export default function AssistantScreen() {
     setSessionId(null);
     await storage.removeItem(SESSION_KEY);
   }, []);
+
+  const runAction = useCallback(async (index: number, action: Action) => {
+    if (!action) return;
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    const whoMap: Record<string, string> = { daughter: "daughter", son: "son", doctor: "doctor" };
+    if (action.type === "call") {
+      router.push({ pathname: "/call", params: { name: action.target_name, who: whoMap[action.target] || "daughter" } });
+    } else {
+      try {
+        await fetch(`${API}/notify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: action.target, message: action.message || "Hello!" }),
+        });
+      } catch {}
+      setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, actionDone: `Message sent to ${action.target_name}` } : m)));
+    }
+  }, [router]);
 
   const showEmpty = !loadingHistory && messages.length === 0;
 
@@ -156,7 +175,7 @@ export default function AssistantScreen() {
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
             onContentSizeChange={scrollToEnd}
-            renderItem={({ item }) => <Bubble msg={item} />}
+            renderItem={({ item, index }) => <Bubble msg={item} onAction={() => runAction(index, item.action || null)} />}
             ListFooterComponent={
               sending ? (
                 <View style={[styles.bubble, styles.bubbleAssistant, styles.typing]}>
@@ -193,24 +212,58 @@ export default function AssistantScreen() {
   );
 }
 
-function Bubble({ msg }: { msg: Msg }) {
+function Bubble({ msg, onAction }: { msg: Msg; onAction: () => void }) {
   const isUser = msg.role === "user";
+  const action = msg.action;
   return (
-    <View style={[styles.bubbleRow, isUser ? styles.rowRight : styles.rowLeft]}>
-      {!isUser && (
-        <View style={styles.avatarSun}>
-          <Ionicons name="sunny" size={16} color="#fff" />
+    <View>
+      <View style={[styles.bubbleRow, isUser ? styles.rowRight : styles.rowLeft]}>
+        {!isUser && (
+          <View style={styles.avatarSun}>
+            <Ionicons name="sunny" size={16} color="#fff" />
+          </View>
+        )}
+        <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+          <Text style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</Text>
+        </View>
+      </View>
+
+      {action && !msg.actionDone && (
+        <Pressable style={styles.actionCard} onPress={onAction} testID={`assistant-action-${action.type}`}>
+          <View style={styles.actionIcon}>
+            <Ionicons name={action.type === "call" ? "call" : "chatbubble-ellipses"} size={22} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.actionTitle}>
+              {action.type === "call" ? `Call ${action.target_name}` : `Message ${action.target_name}`}
+            </Text>
+            {action.type === "message" && action.message ? (
+              <Text style={styles.actionSub} numberOfLines={2}>&quot;{action.message}&quot;</Text>
+            ) : (
+              <Text style={styles.actionSub}>Tap to {action.type === "call" ? "start the call" : "send"}</Text>
+            )}
+          </View>
+          <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
+        </Pressable>
+      )}
+      {msg.actionDone && (
+        <View style={styles.actionDone}>
+          <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
+          <Text style={styles.actionDoneText}>{msg.actionDone}</Text>
         </View>
       )}
-      <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-        <Text style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</Text>
-      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
+  actionCard: { flexDirection: "row", alignItems: "center", gap: 12, marginLeft: 38, marginTop: 8, backgroundColor: theme.colors.brandLight, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: theme.colors.brand },
+  actionIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
+  actionTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface },
+  actionSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
+  actionDone: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 38, marginTop: 8 },
+  actionDoneText: { fontSize: 15, fontWeight: "700", color: theme.colors.success },
   flex: { flex: 1 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
