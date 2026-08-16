@@ -2,6 +2,7 @@ import { useState } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, Platform, Switch } from "react-native";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { theme, API } from "@/src/theme";
@@ -18,6 +19,7 @@ const ROWS = [
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [okayState, setOkayState] = useState<"idle" | "sending" | "done">("idle");
   const [largeText, setLargeText] = useState(false);
   const [highContrast, setHighContrast] = useState(false);
@@ -71,6 +73,25 @@ export default function ProfileScreen() {
                   "One tap to reassure your family"}
             </Text>
           </View>
+        </Pressable>
+
+        {/* Ask Sunshine AI */}
+        <Pressable
+          onPress={() => {
+            if (Platform.OS !== "web") Haptics.selectionAsync();
+            router.push("/assistant");
+          }}
+          style={styles.askCard}
+          testID="ask-sunshine-row"
+        >
+          <View style={styles.askIcon}>
+            <Ionicons name="chatbubble-ellipses" size={28} color="#fff" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.askTitle}>Ask Sunshine</Text>
+            <Text style={styles.askSub}>Your friendly AI helper — ask anything</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={26} color={theme.colors.brand} />
         </Pressable>
 
         {/* Quick accessibility */}
@@ -158,6 +179,24 @@ const styles = StyleSheet.create({
   },
   okayTitle: { color: "#fff", fontSize: 22, fontWeight: "800" },
   okaySub: { color: "rgba(255,255,255,0.92)", fontSize: 15, marginTop: 2 },
+
+  askCard: {
+    marginHorizontal: 20,
+    marginTop: 14,
+    backgroundColor: theme.colors.brandLight,
+    borderRadius: 24,
+    padding: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  askIcon: {
+    width: 54, height: 54, borderRadius: 27,
+    backgroundColor: theme.colors.brand,
+    alignItems: "center", justifyContent: "center",
+  },
+  askTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.onSurface },
+  askSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
 
   sectionTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
   toggleCard: {

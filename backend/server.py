@@ -16,6 +16,9 @@ from datetime import datetime, timezone
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
 
+ASSISTANT_MODEL_PROVIDER = "gemini"
+ASSISTANT_MODEL = "gemini-3.1-pro-preview"
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -92,6 +95,19 @@ class ReelSearchResponse(BaseModel):
     transcript: str
     category: str
     reels: List[Reel]
+
+class AssistantChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    message: str
+
+class AssistantChatResponse(BaseModel):
+    session_id: str
+    answer: str
+
+class AssistantMessage(BaseModel):
+    role: str
+    text: str
+    created_at: str
 
 class SOSResponse(BaseModel):
     ok: bool
@@ -426,6 +442,80 @@ async def reels_voice_search(file: UploadFile = File(...)):
     if not transcript:
         raise HTTPException(422, "No speech detected. Please try again.")
     return await _search_reels(transcript)
+
+
+ASSISTANT_SYSTEM_MESSAGE = (
+    "You are Sunshine, a warm, patient and friendly assistant for older adults aged 60 to 80 in India. "
+    "You are speaking with Kamala. Always reply in very simple, clear English using short sentences. "
+    "Be kind, reassuring and respectful, like a caring grandchild. "
+    "Keep answers brief (2 to 5 short sentences) unless more detail is truly needed. "
+    "You can help with everyday questions, health and wellbeing tips, recipes, technology help, "
+    "staying safe from scams, and keeping in touch with family. "
+    "If something sounds like a medical emergency, gently tell them to use the SOS button or call their doctor. "
+    "Never use jargon, complicated words, or emojis."
+)
+
+
+@api_router.post("/assistant/chat", response_model=AssistantChatResponse)
+async def assistant_chat(req: AssistantChatRequest):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "LLM key not configured")
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(400, "Message cannot be empty")
+
+    session_id = req.session_id or str(uuid.uuid4())
+
+    # Load recent history from MongoDB for multi-turn context
+    history = await db.assistant_messages.find(
+        {"session_id": session_id}
+    ).sort("created_at", 1).to_list(length=40)
+
+    recent = history[-10:]
+    context_lines = []
+    for m in recent:
+        who = "Kamala" if m.get("role") == "user" else "Sunshine"
+        context_lines.append(f"{who}: {m.get('text', '')}")
+    context_block = "\n".join(context_lines)
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=session_id,
+            system_message=ASSISTANT_SYSTEM_MESSAGE,
+        ).with_model(ASSISTANT_MODEL_PROVIDER, ASSISTANT_MODEL)
+
+        if context_block:
+            prompt = (
+                "Here is our recent conversation so far:\n"
+                f"{context_block}\n\n"
+                f"Kamala now says: {message}\n\n"
+                "Reply warmly and simply as Sunshine."
+            )
+        else:
+            prompt = message
+
+        response = await chat.send_message(UserMessage(text=prompt))
+        answer = str(response).strip()
+    except Exception as e:
+        logging.exception("assistant_chat failed")
+        raise HTTPException(502, f"Assistant failed: {e}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.assistant_messages.insert_many([
+        {"id": str(uuid.uuid4()), "session_id": session_id, "role": "user", "text": message, "created_at": now},
+        {"id": str(uuid.uuid4()), "session_id": session_id, "role": "assistant", "text": answer, "created_at": now},
+    ])
+
+    return AssistantChatResponse(session_id=session_id, answer=answer)
+
+
+@api_router.get("/assistant/history", response_model=List[AssistantMessage])
+async def assistant_history(session_id: str):
+    docs = await db.assistant_messages.find(
+        {"session_id": session_id}
+    ).sort("created_at", 1).to_list(length=200)
+    return [AssistantMessage(role=d["role"], text=d["text"], created_at=d["created_at"]) for d in docs]
 
 app.include_router(api_router)
 

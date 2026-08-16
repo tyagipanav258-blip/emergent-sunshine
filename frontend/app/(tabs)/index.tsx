@@ -19,6 +19,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
+import { useRouter } from "expo-router";
 import {
   useAudioRecorder,
   useAudioRecorderState,
@@ -50,6 +51,7 @@ type Reel = {
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [reels, setReels] = useState<Reel[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [category, setCategory] = useState("All");
@@ -229,6 +231,19 @@ export default function HomeScreen() {
           onResult={applySearch}
         />
       )}
+
+      {/* Ask Sunshine floating helper */}
+      <Pressable
+        style={[styles.askFab, { bottom: insets.bottom + 90 }]}
+        onPress={() => {
+          if (Platform.OS !== "web") Haptics.selectionAsync();
+          router.push("/assistant");
+        }}
+        testID="ask-sunshine-fab"
+      >
+        <Ionicons name="chatbubble-ellipses" size={24} color="#fff" />
+        <Text style={styles.askFabText}>Ask</Text>
+      </Pressable>
     </View>
   );
 }
@@ -674,6 +689,24 @@ const styles = StyleSheet.create({
   },
   searchPillText: { color: "#fff", fontSize: 15, fontWeight: "700", flexShrink: 1 },
   chipRow: { paddingHorizontal: 16, gap: 10 },
+  askFab: {
+    position: "absolute",
+    right: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: theme.colors.brand,
+    paddingLeft: 16,
+    paddingRight: 18,
+    height: 52,
+    borderRadius: 26,
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  askFabText: { color: "#fff", fontSize: 16, fontWeight: "800" },
   chip: {
     paddingHorizontal: 18,
     height: 40,

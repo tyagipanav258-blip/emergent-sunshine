@@ -26,10 +26,13 @@ A warm, elderly-friendly (60–80) mobile social + wellbeing app built in React 
 - Haptics on chip press, reel actions, SOS, I'm Okay, tab change.
 
 ## Integrations
-- **Emergent LLM key** — gpt-5.4-mini via emergentintegrations for voice AI.
+- **Emergent LLM key** — gpt-5.4-mini (OpenAI) via emergentintegrations for reel Voice AI + voice-search category matching.
+- **OpenAI Whisper** — speech-to-text for Voice Search Reels (`/api/reels/voice-search`).
+- **Google Gemini (gemini-3.1-pro-preview)** — powers the "Ask Sunshine" conversational assistant (`/api/assistant/chat`, `/api/assistant/history`). Multi-turn context via MongoDB-stored history; warm, simple, elderly-friendly system prompt. Entry points: floating "Ask" button on Home + "Ask Sunshine" card in Profile. Route: `app/assistant.tsx` (modal). Session persisted locally via `@/src/utils/storage`.
+- **react-native-keyboard-controller** — reliable chat keyboard experience (KeyboardProvider at root, KeyboardAvoidingView in assistant).
 - **expo-video** for real short sample videos on Reels.
+- **expo-audio** for voice recording (Voice Search).
 - **expo-haptics** for tactile feedback.
-- **@gorhom/bottom-sheet** provider mounted (available for future).
 
 ## What's MOCKED / prototype
 - Video URLs are Google's public sample videos (unrelated to titles) — the reel overlay (creator/title/description/category) sells the intent.
