@@ -12,7 +12,7 @@ from typing import List, Optional, Literal
 
 import jwt
 import requests
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from pwdlib import PasswordHash
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -36,6 +37,7 @@ JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "43200"))
 
 GEMINI = ("gemini", "gemini-3.1-pro-preview")
 OPENAI_MINI = ("openai", "gpt-5.4-mini")
+AGENT_MODEL = ("gemini", "gemini-2.5-flash")
 
 pwd = PasswordHash.recommended()
 bearer = HTTPBearer(auto_error=False)
@@ -779,6 +781,148 @@ async def _detect_action(message: str) -> Optional[dict]:
 async def assistant_history(session_id: str):
     docs = await db.assistant_messages.find({"session_id": session_id}, {"_id": 0}).sort("created_at", 1).to_list(200)
     return [{"role": d["role"], "text": d["text"]} for d in docs]
+
+
+# ============================ VOICE AGENT (talk to Sunshine) ============================
+AGENT_SYS = (
+    "You are Sunshine, a warm voice assistant for an older adult named Kamala in India. "
+    "You can DO things in her app. Read her request and choose ONE intent, then reply in ONE short warm spoken sentence. "
+    "Return ONLY JSON with these keys: "
+    "reply (string, one short kind sentence spoken back to her), "
+    "intent (one of: call, notify, mark_medicine, order_medicine, book_doctor, arrange_transport, im_okay, sos, answer), "
+    "target (one of: daughter, son, doctor, or null), "
+    "medicine (the medicine name she mentioned, or null), "
+    "message (text to send if intent is notify, else null), "
+    "details (any extra detail for a request, or null). "
+    "Meaning of intents: call=start a video/phone call to target; notify=send a message to target; "
+    "mark_medicine=mark a medicine as taken; order_medicine=arrange a medicine refill; book_doctor=arrange a doctor consultation; "
+    "arrange_transport=arrange a taxi/transport; im_okay=reassure family she is fine; sos=emergency, alert family; answer=just answer her question. "
+    "People: daughter is Priya, son is Rahul, doctor is Dr. Sharma. "
+    "If it is a general question, use intent 'answer' and put the helpful answer in 'reply'. No emojis, no jargon."
+)
+NAMES = {"daughter": "Priya", "son": "Rahul", "doctor": "Dr. Sharma"}
+
+
+async def _transcribe_audio(audio: bytes, ext: str) -> str:
+    bio = io.BytesIO(audio)
+    bio.name = f"speech.{ext}"
+    stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+    result = await stt.transcribe(file=bio, model="whisper-1", response_format="json")
+    return (getattr(result, "text", "") or "").strip()
+
+
+async def _run_agent(elder: dict, message: str) -> dict:
+    """LLM decides an intent; backend executes data actions and returns a result."""
+    eid = elder["id"]
+    parsed = {"reply": "", "intent": "answer", "target": None, "medicine": None, "message": None, "details": None}
+    try:
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}", system_message=AGENT_SYS).with_model(*AGENT_MODEL)
+        raw = str(await chat.send_message(UserMessage(text=message)))
+        mm = re.search(r"\{.*\}", raw, re.S)
+        if mm:
+            got = json.loads(mm.group(0))
+            parsed.update({k: got.get(k, parsed[k]) for k in parsed})
+    except Exception:
+        logger.exception("agent llm failed")
+
+    intent = parsed.get("intent") or "answer"
+    target = parsed.get("target") if parsed.get("target") in NAMES else None
+    reply = (parsed.get("reply") or "").strip()
+    action = None
+    executed = None
+
+    if intent == "call" and target:
+        action = {"type": "call", "target": target, "target_name": NAMES[target]}
+        if not reply:
+            reply = f"Calling {NAMES[target]} now."
+    elif intent == "notify" and target:
+        msg = parsed.get("message") or "Hello from Kamala!"
+        await db.notifications.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "to": target, "message": msg, "from_role": "elder", "kind": "message", "at": datetime.now(timezone.utc).isoformat()})
+        executed = f"Message sent to {NAMES[target]}"
+        if not reply:
+            reply = f"I've sent your message to {NAMES[target]}."
+    elif intent == "mark_medicine":
+        wanted = (parsed.get("medicine") or "").lower().strip()
+        meds = await db.medicines.find({"elder_id": eid}, {"_id": 0}).to_list(100)
+        target_med = None
+        if wanted:
+            target_med = next((m for m in meds if wanted in m["name"].lower() or m["name"].lower() in wanted), None)
+        if not target_med:
+            target_med = next((m for m in meds if not m.get("taken_today")), None)
+        if target_med:
+            new_stock = max(target_med["stock"] - target_med["per_day"], 0)
+            await db.medicines.update_one({"id": target_med["id"]}, {"$set": {"taken_today": True, "stock": new_stock}})
+            executed = f"Marked {target_med['name']} as taken"
+            if not reply:
+                reply = f"Well done. I've marked your {target_med['name']} as taken."
+        else:
+            reply = reply or "All your medicines are already marked as taken. Great job!"
+    elif intent == "order_medicine":
+        t = await _create_task(eid, "reorder", "Reorder medicine", parsed.get("details") or "Please arrange a medicine refill.")
+        executed = "Reorder request sent to your family"
+        if not reply:
+            reply = "I've asked your family to arrange a medicine refill."
+    elif intent == "book_doctor":
+        t = await _create_task(eid, "doctor", "Book a doctor", parsed.get("details") or "Please book a doctor consultation.")
+        executed = "Doctor booking request sent to your family"
+        if not reply:
+            reply = "I've requested a doctor consultation for you."
+    elif intent == "arrange_transport":
+        t = await _create_task(eid, "transport", "Arrange transport", parsed.get("details") or "Please arrange transport.")
+        executed = "Transport request sent to your family"
+        if not reply:
+            reply = "I've asked your family to arrange transport for you."
+    elif intent == "im_okay":
+        await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "type": "im_okay", "at": datetime.now(timezone.utc).isoformat()})
+        executed = "Your family has been reassured"
+        if not reply:
+            reply = "I've let your family know you are doing well."
+    elif intent == "sos":
+        await db.events.insert_one({"id": str(uuid.uuid4()), "elder_id": eid, "type": "sos", "at": datetime.now(timezone.utc).isoformat()})
+        action = {"type": "sos"}
+        executed = "Family and doctor alerted"
+        if not reply:
+            reply = "Stay calm. I've alerted your family and doctor right away."
+    else:
+        if not reply:
+            reply = "I'm here to help. You can ask me to call family, send a message, mark medicines, or arrange things."
+
+    return {"reply": reply, "action": action, "executed": executed, "intent": intent}
+
+
+class AgentTextIn(BaseModel):
+    message: str
+
+@api.post("/agent/text")
+async def agent_text(b: AgentTextIn, u: dict = Depends(require_role("elder"))):
+    msg = b.message.strip()
+    if not msg:
+        raise HTTPException(400, "Message cannot be empty")
+    out = await _run_agent(u, msg)
+    return {"transcript": msg, **out}
+
+
+@api.post("/agent/voice")
+async def agent_voice(file: UploadFile = File(...), u: dict = Depends(require_role("elder"))):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "Empty audio")
+    ext = "m4a"
+    if file.filename and "." in file.filename:
+        e = file.filename.rsplit(".", 1)[-1].lower()
+        if e in {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}:
+            ext = e
+    try:
+        transcript = await _transcribe_audio(audio, ext)
+    except Exception as e:
+        logger.exception("agent transcription failed")
+        raise HTTPException(502, f"Could not understand audio: {e}")
+    if not transcript:
+        raise HTTPException(422, "No speech detected. Please try again.")
+    out = await _run_agent(u, transcript)
+    return {"transcript": transcript, **out}
 
 
 @api.get("/")

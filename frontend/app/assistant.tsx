@@ -1,211 +1,205 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  Pressable,
-  TextInput,
-  ActivityIndicator,
-  Platform,
-  ScrollView,
+  View, Text, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Platform, Linking,
 } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
-import { storage } from "@/src/utils/storage";
-import { theme, API } from "@/src/theme";
+import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from "expo-audio";
+import { apiFetch, getToken } from "@/src/api";
+import { API, theme } from "@/src/theme";
 
-const SESSION_KEY = "sunshine_assistant_session";
+type Action = { type: "call" | "sos"; target?: string; target_name?: string } | null;
+type Msg = { role: "user" | "assistant"; text: string; action?: Action; executed?: string | null };
 
-type Action = { type: "call" | "message"; target: string; target_name: string; message?: string | null } | null;
-type Msg = { role: "user" | "assistant"; text: string; action?: Action; actionDone?: string };
-
-const SUGGESTIONS = [
-  "Call my daughter Priya",
-  "Tell my son I had lunch",
-  "Suggest a light dinner",
-  "How do I stay safe from scams?",
-];
+const EXAMPLES = ["Call my daughter Priya", "Mark my Metformin as taken", "Order my medicines", "Tell my son I'm okay"];
 
 export default function AssistantScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<Msg>>(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+
   const [messages, setMessages] = useState<Msg[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [typing, setTyping] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [status, setStatus] = useState("Tap the big button and just speak");
+  const [showType, setShowType] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      const sid = await storage.getItem<string>(SESSION_KEY, "");
-      if (sid) {
-        setSessionId(sid);
-        try {
-          const res = await fetch(`${API}/assistant/history?session_id=${sid}`);
-          if (res.ok) {
-            const data = await res.json();
-            setMessages(data.map((m: any) => ({ role: m.role, text: m.text })));
-          }
-        } catch {}
-      }
-      setLoadingHistory(false);
-    })();
-  }, []);
+  const scrollEnd = useCallback(() => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80), []);
 
-  const scrollToEnd = useCallback(() => {
-    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
-  }, []);
+  const handleResult = useCallback((data: any) => {
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text: data.transcript },
+      { role: "assistant", text: data.reply, action: data.action || null, executed: data.executed || null },
+    ]);
+    scrollEnd();
+  }, [scrollEnd]);
 
-  const send = useCallback(
-    async (text: string) => {
-      const msg = text.trim();
-      if (!msg || sending) return;
-      if (Platform.OS !== "web") Haptics.selectionAsync();
-      setInput("");
-      setMessages((prev) => [...prev, { role: "user", text: msg }]);
-      setSending(true);
-      scrollToEnd();
-      try {
-        const res = await fetch(`${API}/assistant/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, message: msg }),
-        });
-        const data = await res.json();
-        if (!sessionId && data.session_id) {
-          setSessionId(data.session_id);
-          await storage.setItem(SESSION_KEY, data.session_id);
-        }
-        setMessages((prev) => [...prev, { role: "assistant", text: data.answer || "Sorry, I couldn't answer that.", action: data.action || null }]);
-      } catch {
-        setMessages((prev) => [...prev, { role: "assistant", text: "Sorry, I'm having trouble right now. Please try again in a moment." }]);
-      } finally {
-        setSending(false);
-        scrollToEnd();
-      }
-    },
-    [sending, sessionId, scrollToEnd]
-  );
-
-  const startNewChat = useCallback(async () => {
+  const sendText = useCallback(async (text: string) => {
+    const msg = text.trim();
+    if (!msg || busy) return;
     if (Platform.OS !== "web") Haptics.selectionAsync();
-    setMessages([]);
-    setSessionId(null);
-    await storage.removeItem(SESSION_KEY);
-  }, []);
+    setInput("");
+    setTyping(true);
+    setBusy(true);
+    try {
+      const data = await apiFetch<any>("/agent/text", { method: "POST", body: { message: msg } });
+      handleResult(data);
+    } catch {
+      setMessages((prev) => [...prev, { role: "user", text: msg }, { role: "assistant", text: "Sorry, I had trouble. Please try again." }]);
+    } finally {
+      setTyping(false); setBusy(false); scrollEnd();
+    }
+  }, [busy, handleResult, scrollEnd]);
 
-  const runAction = useCallback(async (index: number, action: Action) => {
+  const startRecording = useCallback(async () => {
+    if (Platform.OS === "web") {
+      setShowType(true);
+      setStatus("Voice works on the phone app. Please type below for now.");
+      return;
+    }
+    try {
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        setStatus("Microphone is off. Please allow it in Settings.");
+        return;
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setRecording(true);
+      setStatus("Listening... tap again when you're done");
+    } catch {
+      setStatus("Could not start the microphone. Please type below.");
+      setShowType(true);
+    }
+  }, [recorder]);
+
+  const stopAndSend = useCallback(async () => {
+    setRecording(false);
+    setStatus("Thinking...");
+    setBusy(true);
+    setTyping(true);
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      const uri = recorder.uri;
+      if (!uri) throw new Error("no audio");
+      const token = await getToken();
+      const form = new FormData();
+      const name = uri.split("/").pop() || "speech.m4a";
+      form.append("file", { uri, name, type: "audio/m4a" } as any);
+      const res = await fetch(`${API}/agent/voice`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+      if (!res.ok) throw new Error("failed");
+      handleResult(await res.json());
+    } catch {
+      setStatus("Sorry, I couldn't hear that. Tap to try again.");
+      setMessages((prev) => [...prev, { role: "assistant", text: "I couldn't hear you clearly. Please try again or type below." }]);
+    } finally {
+      setBusy(false); setTyping(false);
+      setStatus("Tap the big button and just speak");
+      scrollEnd();
+    }
+  }, [recorder, handleResult, scrollEnd]);
+
+  const micPress = () => (recording ? stopAndSend() : startRecording());
+
+  const runAction = useCallback((action: Action) => {
     if (!action) return;
     if (Platform.OS !== "web") Haptics.selectionAsync();
-    const whoMap: Record<string, string> = { daughter: "daughter", son: "son", doctor: "doctor" };
     if (action.type === "call") {
-      router.push({ pathname: "/call", params: { name: action.target_name, who: whoMap[action.target] || "daughter" } });
-    } else {
-      try {
-        await fetch(`${API}/notify`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ to: action.target, message: action.message || "Hello!" }),
-        });
-      } catch {}
-      setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, actionDone: `Message sent to ${action.target_name}` } : m)));
+      router.push({ pathname: "/call", params: { name: action.target_name || "Family", who: action.target || "daughter" } });
     }
   }, [router]);
 
-  const showEmpty = !loadingHistory && messages.length === 0;
-
   return (
     <View style={styles.root}>
-      {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.headerBtn} testID="assistant-back">
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.hBtn} testID="assistant-back">
           <Ionicons name="chevron-down" size={28} color={theme.colors.onSurface} />
         </Pressable>
-        <View style={styles.headerCenter}>
-          <View style={styles.headerSun}>
-            <Ionicons name="sunny" size={22} color="#fff" />
-          </View>
+        <View style={styles.hCenter}>
+          <View style={styles.hSun}><Ionicons name="sunny" size={22} color="#fff" /></View>
           <View>
-            <Text style={styles.headerTitle}>Ask Sunshine</Text>
-            <Text style={styles.headerSub}>Your friendly helper</Text>
+            <Text style={styles.hTitle}>Ask Sunshine</Text>
+            <Text style={styles.hSub}>Just talk to me</Text>
           </View>
         </View>
-        <Pressable onPress={startNewChat} hitSlop={12} style={styles.headerBtn} testID="assistant-new-chat">
-          <Ionicons name="create-outline" size={26} color={theme.colors.brand} />
-        </Pressable>
+        <View style={{ width: 44 }} />
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "translate-with-padding"}
-        keyboardVerticalOffset={0}
-      >
-        {loadingHistory ? (
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color={theme.colors.brand} />
-          </View>
-        ) : showEmpty ? (
-          <ScrollView contentContainerStyle={styles.emptyWrap} keyboardShouldPersistTaps="handled">
-            <View style={styles.bigSun}>
-              <Ionicons name="sunny" size={54} color="#fff" />
-            </View>
-            <Text style={styles.emptyTitle}>Hello, Kamala!</Text>
-            <Text style={styles.emptyText}>
-              Ask me anything. I can help with recipes, health tips, staying safe, or using your phone.
-            </Text>
-            <View style={styles.suggestions}>
-              {SUGGESTIONS.map((s) => (
-                <Pressable key={s} style={styles.suggestionCard} onPress={() => send(s)} testID={`assistant-suggestion-${s}`}>
-                  <Ionicons name="chatbubble-ellipses-outline" size={22} color={theme.colors.brand} />
-                  <Text style={styles.suggestionText}>{s}</Text>
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : "translate-with-padding"}>
+        {messages.length === 0 ? (
+          <View style={styles.hero}>
+            <Text style={styles.heroTitle}>Hello, Kamala!</Text>
+            <Text style={styles.heroText}>I can call your family, send messages, mark medicines, order refills, book a doctor and more. Just tell me.</Text>
+            <View style={styles.chips}>
+              {EXAMPLES.map((e) => (
+                <Pressable key={e} style={styles.chip} onPress={() => sendText(e)} testID={`assistant-example-${e}`}>
+                  <Text style={styles.chipText}>{e}</Text>
                 </Pressable>
               ))}
             </View>
-          </ScrollView>
+          </View>
         ) : (
           <FlatList
             ref={listRef}
             data={messages}
             keyExtractor={(_, i) => String(i)}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={styles.list}
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={scrollToEnd}
-            renderItem={({ item, index }) => <Bubble msg={item} onAction={() => runAction(index, item.action || null)} />}
-            ListFooterComponent={
-              sending ? (
-                <View style={[styles.bubble, styles.bubbleAssistant, styles.typing]}>
-                  <ActivityIndicator size="small" color={theme.colors.brand} />
-                  <Text style={styles.typingText}>Sunshine is typing...</Text>
-                </View>
-              ) : null
-            }
+            onContentSizeChange={scrollEnd}
+            renderItem={({ item }) => <Bubble msg={item} onAction={() => runAction(item.action || null)} />}
+            ListFooterComponent={typing ? (
+              <View style={[styles.bubble, styles.bubbleA, styles.typing]}>
+                <ActivityIndicator size="small" color={theme.colors.brand} />
+                <Text style={styles.typingText}>Sunshine is thinking...</Text>
+              </View>
+            ) : null}
           />
         )}
 
-        {/* Input bar */}
-        <View style={[styles.inputBar, { paddingBottom: insets.bottom > 0 ? insets.bottom : 16 }]}>
-          <TextInput
-            style={styles.input}
-            placeholder="Type your message..."
-            placeholderTextColor={theme.colors.muted}
-            value={input}
-            onChangeText={setInput}
-            multiline
-            testID="assistant-input"
-          />
+        {/* Mic zone */}
+        <View style={[styles.micZone, { paddingBottom: insets.bottom > 0 ? insets.bottom + 8 : 16 }]}>
+          <Text style={styles.status}>{status}</Text>
           <Pressable
-            style={[styles.sendBtn, (!input.trim() || sending) && { opacity: 0.5 }]}
-            onPress={() => send(input)}
-            disabled={!input.trim() || sending}
-            testID="assistant-send"
+            style={[styles.mic, recording && styles.micRec, busy && !recording && styles.micBusy]}
+            onPress={micPress}
+            disabled={busy && !recording}
+            testID="agent-mic"
           >
-            <Ionicons name="arrow-up" size={26} color="#fff" />
+            {busy && !recording ? (
+              <ActivityIndicator size="large" color="#fff" />
+            ) : (
+              <Ionicons name={recording ? "stop" : "mic"} size={52} color="#fff" />
+            )}
           </Pressable>
+
+          {status.includes("Settings") && (
+            <Pressable style={styles.settingsBtn} onPress={() => Linking.openSettings()} testID="assistant-settings">
+              <Text style={styles.settingsText}>Open Settings</Text>
+            </Pressable>
+          )}
+
+          {!showType ? (
+            <Pressable onPress={() => setShowType(true)} testID="assistant-show-type">
+              <Text style={styles.typeToggle}>or type instead</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.inputRow}>
+              <TextInput style={styles.input} placeholder="Type your message..." placeholderTextColor={theme.colors.muted} value={input} onChangeText={setInput} testID="assistant-input" />
+              <Pressable style={[styles.send, (!input.trim() || busy) && { opacity: 0.5 }]} onPress={() => sendText(input)} disabled={!input.trim() || busy} testID="assistant-send">
+                <Ionicons name="arrow-up" size={24} color="#fff" />
+              </Pressable>
+            </View>
+          )}
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -214,43 +208,26 @@ export default function AssistantScreen() {
 
 function Bubble({ msg, onAction }: { msg: Msg; onAction: () => void }) {
   const isUser = msg.role === "user";
-  const action = msg.action;
   return (
     <View>
-      <View style={[styles.bubbleRow, isUser ? styles.rowRight : styles.rowLeft]}>
-        {!isUser && (
-          <View style={styles.avatarSun}>
-            <Ionicons name="sunny" size={16} color="#fff" />
-          </View>
-        )}
-        <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
+      <View style={[styles.row, isUser ? styles.rowR : styles.rowL]}>
+        {!isUser && <View style={styles.av}><Ionicons name="sunny" size={16} color="#fff" /></View>}
+        <View style={[styles.bubble, isUser ? styles.bubbleU : styles.bubbleA]}>
           <Text style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</Text>
         </View>
       </View>
-
-      {action && !msg.actionDone && (
-        <Pressable style={styles.actionCard} onPress={onAction} testID={`assistant-action-${action.type}`}>
-          <View style={styles.actionIcon}>
-            <Ionicons name={action.type === "call" ? "call" : "chatbubble-ellipses"} size={22} color="#fff" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.actionTitle}>
-              {action.type === "call" ? `Call ${action.target_name}` : `Message ${action.target_name}`}
-            </Text>
-            {action.type === "message" && action.message ? (
-              <Text style={styles.actionSub} numberOfLines={2}>&quot;{action.message}&quot;</Text>
-            ) : (
-              <Text style={styles.actionSub}>Tap to {action.type === "call" ? "start the call" : "send"}</Text>
-            )}
-          </View>
+      {msg.executed && (
+        <View style={styles.done}>
+          <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
+          <Text style={styles.doneText}>{msg.executed}</Text>
+        </View>
+      )}
+      {msg.action?.type === "call" && (
+        <Pressable style={styles.actionCard} onPress={onAction} testID="assistant-call-action">
+          <View style={styles.actionIcon}><Ionicons name="call" size={22} color="#fff" /></View>
+          <Text style={styles.actionText}>Call {msg.action.target_name}</Text>
           <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
         </Pressable>
-      )}
-      {msg.actionDone && (
-        <View style={styles.actionDone}>
-          <Ionicons name="checkmark-circle" size={20} color={theme.colors.success} />
-          <Text style={styles.actionDoneText}>{msg.actionDone}</Text>
-        </View>
       )}
     </View>
   );
@@ -258,109 +235,44 @@ function Bubble({ msg, onAction }: { msg: Msg; onAction: () => void }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
-  actionCard: { flexDirection: "row", alignItems: "center", gap: 12, marginLeft: 38, marginTop: 8, backgroundColor: theme.colors.brandLight, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: theme.colors.brand },
-  actionIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
-  actionTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface },
-  actionSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
-  actionDone: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 38, marginTop: 8 },
-  actionDoneText: { fontSize: 15, fontWeight: "700", color: theme.colors.success },
   flex: { flex: 1 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-  },
-  headerBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  headerCenter: { flexDirection: "row", alignItems: "center", gap: 10 },
-  headerSun: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: theme.colors.brand,
-    alignItems: "center", justifyContent: "center",
-  },
-  headerTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.onSurface },
-  headerSub: { fontSize: 13, color: theme.colors.muted },
-
-  listContent: { padding: 16, gap: 12, paddingBottom: 20 },
-  bubbleRow: { flexDirection: "row", alignItems: "flex-end", gap: 8, maxWidth: "100%" },
-  rowLeft: { justifyContent: "flex-start" },
-  rowRight: { justifyContent: "flex-end" },
-  avatarSun: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: theme.colors.brand,
-    alignItems: "center", justifyContent: "center",
-    marginBottom: 2,
-  },
-  bubble: {
-    maxWidth: "82%",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 22,
-  },
-  bubbleUser: {
-    backgroundColor: theme.colors.brand,
-    borderBottomRightRadius: 6,
-  },
-  bubbleAssistant: {
-    backgroundColor: theme.colors.surfaceSecondary,
-    borderBottomLeftRadius: 6,
-  },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+  hBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  hCenter: { flexDirection: "row", alignItems: "center", gap: 10 },
+  hSun: { width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
+  hTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.onSurface },
+  hSub: { fontSize: 13, color: theme.colors.muted },
+  hero: { flex: 1, padding: 24, justifyContent: "center", gap: 12 },
+  heroTitle: { fontSize: 28, fontWeight: "800", color: theme.colors.onSurface },
+  heroText: { fontSize: 18, lineHeight: 25, color: theme.colors.onSurfaceSecondary },
+  chips: { gap: 10, marginTop: 8 },
+  chip: { backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: theme.colors.border },
+  chipText: { fontSize: 17, fontWeight: "600", color: theme.colors.onSurface },
+  list: { padding: 16, gap: 12, paddingBottom: 20 },
+  row: { flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  rowL: { justifyContent: "flex-start" },
+  rowR: { justifyContent: "flex-end" },
+  av: { width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
+  bubble: { maxWidth: "82%", paddingHorizontal: 16, paddingVertical: 12, borderRadius: 22 },
+  bubbleU: { backgroundColor: theme.colors.brand, borderBottomRightRadius: 6 },
+  bubbleA: { backgroundColor: theme.colors.surfaceSecondary, borderBottomLeftRadius: 6 },
   bubbleText: { fontSize: 18, lineHeight: 25, color: theme.colors.onSurface },
   typing: { flexDirection: "row", alignItems: "center", gap: 10, alignSelf: "flex-start", marginLeft: 38 },
   typingText: { fontSize: 15, color: theme.colors.muted, fontWeight: "600" },
-
-  emptyWrap: { alignItems: "center", padding: 24, paddingTop: 40, gap: 12 },
-  bigSun: {
-    width: 96, height: 96, borderRadius: 48,
-    backgroundColor: theme.colors.brand,
-    alignItems: "center", justifyContent: "center",
-    shadowColor: theme.colors.brand,
-    shadowOpacity: 0.35, shadowRadius: 16, shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
-  },
-  emptyTitle: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, marginTop: 8 },
-  emptyText: { fontSize: 17, lineHeight: 24, color: theme.colors.onSurfaceSecondary, textAlign: "center", paddingHorizontal: 12 },
-  suggestions: { alignSelf: "stretch", gap: 12, marginTop: 16 },
-  suggestionCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: theme.colors.surfaceSecondary,
-    borderRadius: 18,
-    padding: 18,
-  },
-  suggestionText: { fontSize: 17, fontWeight: "600", color: theme.colors.onSurface, flex: 1 },
-
-  inputBar: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    backgroundColor: theme.colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  input: {
-    flex: 1,
-    fontSize: 18,
-    color: theme.colors.onSurface,
-    backgroundColor: theme.colors.surfaceSecondary,
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 12,
-    minHeight: 52,
-    maxHeight: 120,
-  },
-  sendBtn: {
-    width: 52, height: 52, borderRadius: 26,
-    backgroundColor: theme.colors.brand,
-    alignItems: "center", justifyContent: "center",
-  },
+  done: { flexDirection: "row", alignItems: "center", gap: 8, marginLeft: 38, marginTop: 8 },
+  doneText: { fontSize: 15, fontWeight: "700", color: theme.colors.success },
+  actionCard: { flexDirection: "row", alignItems: "center", gap: 12, marginLeft: 38, marginTop: 8, backgroundColor: theme.colors.brandLight, borderRadius: 18, padding: 14, borderWidth: 1, borderColor: theme.colors.brand },
+  actionIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
+  actionText: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface, flex: 1 },
+  micZone: { alignItems: "center", paddingTop: 12, paddingHorizontal: 20, gap: 12, borderTopWidth: 1, borderTopColor: theme.colors.border, backgroundColor: theme.colors.surface },
+  status: { fontSize: 16, fontWeight: "600", color: theme.colors.onSurfaceSecondary, textAlign: "center" },
+  mic: { width: 96, height: 96, borderRadius: 48, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center", shadowColor: theme.colors.brand, shadowOpacity: 0.4, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  micRec: { backgroundColor: theme.colors.error },
+  micBusy: { backgroundColor: theme.colors.muted },
+  settingsBtn: { backgroundColor: theme.colors.brand, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 999 },
+  settingsText: { color: "#fff", fontWeight: "800", fontSize: 15 },
+  typeToggle: { fontSize: 16, color: theme.colors.brand, fontWeight: "700", paddingVertical: 4 },
+  inputRow: { flexDirection: "row", alignItems: "center", gap: 10, alignSelf: "stretch" },
+  input: { flex: 1, fontSize: 17, color: theme.colors.onSurface, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 22, paddingHorizontal: 18, paddingVertical: 12, minHeight: 50 },
+  send: { width: 50, height: 50, borderRadius: 25, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
 });
