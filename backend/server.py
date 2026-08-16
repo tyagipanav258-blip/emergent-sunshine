@@ -1,8 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import io
+import re
+import json
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -11,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -80,6 +84,14 @@ class VoiceAskRequest(BaseModel):
 
 class VoiceAskResponse(BaseModel):
     answer: str
+
+class ReelSearchRequest(BaseModel):
+    query: str
+
+class ReelSearchResponse(BaseModel):
+    transcript: str
+    category: str
+    reels: List[Reel]
 
 class SOSResponse(BaseModel):
     ok: bool
@@ -308,6 +320,112 @@ async def voice_ask(req: VoiceAskRequest):
     except Exception as e:
         logging.exception("voice_ask failed")
         raise HTTPException(502, f"Voice assistant failed: {e}")
+
+
+REEL_CATEGORIES = sorted({r.category for r in REELS})
+
+SEARCH_STOPWORDS = {
+    "and", "the", "for", "you", "show", "showme", "want", "watch", "some",
+    "that", "this", "with", "please", "can", "see", "more", "videos", "video",
+    "about", "how", "what", "give", "find", "like", "would", "love", "any",
+    "get", "look", "looking", "something", "learn", "learning", "new", "your",
+}
+
+
+def _keyword_match(query: str) -> List[Reel]:
+    q = query.lower()
+    words = [w for w in re.split(r"[^a-z0-9]+", q) if len(w) > 2 and w not in SEARCH_STOPWORDS]
+    matched = []
+    for r in REELS:
+        hay = f"{r.title} {r.description} {r.category} {r.creator}".lower()
+        if any(w in hay for w in words):
+            matched.append(r)
+    return matched
+
+
+async def _match_category(query: str) -> Optional[str]:
+    """Ask the LLM to map a spoken request to one of the known categories."""
+    if not EMERGENT_LLM_KEY:
+        return None
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"search-{uuid.uuid4()}",
+            system_message=(
+                "You map a user's spoken request to ONE video category. "
+                f"Allowed categories: {', '.join(REEL_CATEGORIES)}. "
+                "Reply with ONLY a JSON object like {\"category\": \"Recipes\"}. "
+                "If nothing fits, use {\"category\": \"All\"}."
+            ),
+        ).with_model("openai", "gpt-5.4-mini")
+        raw = str(await chat.send_message(UserMessage(text=f"Request: {query}")))
+        m = re.search(r"\{.*\}", raw, re.S)
+        if m:
+            cat = json.loads(m.group(0)).get("category", "All")
+            for c in REEL_CATEGORIES:
+                if c.lower() == str(cat).lower():
+                    return c
+            return "All"
+    except Exception:
+        logging.exception("_match_category failed")
+    return None
+
+
+async def _search_reels(query: str) -> ReelSearchResponse:
+    query = (query or "").strip()
+    if not query:
+        return ReelSearchResponse(transcript=query, category="All", reels=REELS)
+
+    category = await _match_category(query)
+    keyword_hits = _keyword_match(query)
+
+    if keyword_hits:
+        results = keyword_hits
+        chosen = category if (category and category != "All") else "All"
+    elif category and category != "All":
+        results = [r for r in REELS if r.category == category]
+        chosen = category
+    else:
+        results = REELS
+        chosen = "All"
+
+    if not results:
+        results = REELS
+        chosen = "All"
+    return ReelSearchResponse(transcript=query, category=chosen, reels=results)
+
+
+@api_router.post("/reels/search", response_model=ReelSearchResponse)
+async def reels_text_search(req: ReelSearchRequest):
+    return await _search_reels(req.query)
+
+
+@api_router.post("/reels/voice-search", response_model=ReelSearchResponse)
+async def reels_voice_search(file: UploadFile = File(...)):
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "LLM key not configured")
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "Empty audio file")
+    ext = "webm"
+    if file.filename and "." in file.filename:
+        ext = file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}:
+        ext = "m4a"
+    try:
+        bio = io.BytesIO(audio)
+        bio.name = f"query.{ext}"
+        stt = OpenAISpeechToText(api_key=EMERGENT_LLM_KEY)
+        result = await stt.transcribe(file=bio, model="whisper-1", response_format="json")
+        transcript = getattr(result, "text", "") or ""
+        transcript = transcript.strip()
+    except Exception as e:
+        logging.exception("voice_search transcription failed")
+        raise HTTPException(502, f"Could not understand audio: {e}")
+
+    if not transcript:
+        raise HTTPException(422, "No speech detected. Please try again.")
+    return await _search_reels(transcript)
 
 app.include_router(api_router)
 

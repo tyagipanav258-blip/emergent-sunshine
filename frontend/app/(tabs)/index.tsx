@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -13,11 +13,19 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from "react-native";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
+import {
+  useAudioRecorder,
+  useAudioRecorderState,
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+} from "expo-audio";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { theme, API } from "@/src/theme";
@@ -48,6 +56,8 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [voiceReel, setVoiceReel] = useState<Reel | null>(null);
   const [itemHeight, setItemHeight] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLabel, setSearchLabel] = useState<string | null>(null);
 
   const loadReels = useCallback(async (cat: string) => {
     setLoading(true);
@@ -65,8 +75,29 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    if (searchLabel) return; // don't reload category feed while a search is active
     loadReels(category);
-  }, [category, loadReels]);
+  }, [category, loadReels, searchLabel]);
+
+  const pickCategory = useCallback((c: string) => {
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    setSearchLabel(null);
+    setCategory(c);
+  }, []);
+
+  const applySearch = useCallback((transcript: string, cat: string, results: Reel[]) => {
+    setReels(results);
+    setActiveIndex(0);
+    setSearchLabel(transcript);
+    setCategory("");
+    setSearchOpen(false);
+    setLoading(false);
+  }, []);
+
+  const clearSearch = useCallback(() => {
+    setSearchLabel(null);
+    setCategory("All");
+  }, []);
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
 
@@ -138,36 +169,65 @@ export default function HomeScreen() {
         style={[styles.topScrim, { paddingTop: insets.top + 8 }]}
       >
         <View style={styles.topRow}>
+          <View style={{ width: 44 }} />
           <Text style={styles.forYou} testID="for-you-title">
             For You <Ionicons name="sunny" size={22} color="#FFD98A" />
           </Text>
+          <Pressable
+            style={styles.searchBtn}
+            onPress={() => {
+              if (Platform.OS !== "web") Haptics.selectionAsync();
+              setSearchOpen(true);
+            }}
+            testID="voice-search-btn"
+            hitSlop={10}
+          >
+            <Ionicons name="mic" size={22} color="#fff" />
+          </Pressable>
         </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-        >
-          {CATEGORIES.map((c) => {
-            const active = c === category;
-            return (
-              <Pressable
-                key={c}
-                testID={`chip-${c.toLowerCase()}`}
-                onPress={() => {
-                  if (Platform.OS !== "web") Haptics.selectionAsync();
-                  setCategory(c);
-                }}
-                style={[styles.chip, active && styles.chipActive]}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+
+        {searchLabel ? (
+          <View style={styles.searchPillRow}>
+            <View style={styles.searchPill} testID="active-search-pill">
+              <Ionicons name="search" size={16} color="#fff" />
+              <Text style={styles.searchPillText} numberOfLines={1}>{searchLabel}</Text>
+              <Pressable onPress={clearSearch} hitSlop={10} testID="clear-search-btn">
+                <Ionicons name="close-circle" size={20} color="#fff" />
               </Pressable>
-            );
-          })}
-        </ScrollView>
+            </View>
+          </View>
+        ) : (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipRow}
+          >
+            {CATEGORIES.map((c) => {
+              const active = c === category;
+              return (
+                <Pressable
+                  key={c}
+                  testID={`chip-${c.toLowerCase()}`}
+                  onPress={() => pickCategory(c)}
+                  style={[styles.chip, active && styles.chipActive]}
+                >
+                  <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        )}
       </LinearGradient>
 
       {voiceReel && (
         <VoiceOverlay reel={voiceReel} onClose={() => setVoiceReel(null)} />
+      )}
+
+      {searchOpen && (
+        <VoiceSearchOverlay
+          onClose={() => setSearchOpen(false)}
+          onResult={applySearch}
+        />
       )}
     </View>
   );
@@ -400,6 +460,182 @@ function VoiceOverlay({ reel, onClose }: { reel: Reel; onClose: () => void }) {
   );
 }
 
+type Reel2 = Reel;
+
+function VoiceSearchOverlay({
+  onClose,
+  onResult,
+}: {
+  onClose: () => void;
+  onResult: (transcript: string, category: string, reels: Reel2[]) => void;
+}) {
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(recorder);
+  const [phase, setPhase] = useState<"idle" | "recording" | "processing" | "denied" | "error">("idle");
+  const [typed, setTyped] = useState("");
+  const [errMsg, setErrMsg] = useState("");
+
+  const examples = ["Show me easy recipes", "Gentle yoga", "Places in Kerala", "Avoid scams"];
+
+  const startRecording = async () => {
+    if (Platform.OS === "web") {
+      setPhase("error");
+      setErrMsg("Voice recording works on the Sunshine phone app. For now, please type below.");
+      return;
+    }
+    try {
+      const perm = await AudioModule.requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        setPhase("denied");
+        return;
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      setPhase("recording");
+    } catch {
+      setPhase("error");
+      setErrMsg("Could not start the microphone. Please type your request below.");
+    }
+  };
+
+  const stopAndSearch = async () => {
+    try {
+      setPhase("processing");
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      const uri = recorder.uri;
+      if (!uri) throw new Error("No recording");
+      const form = new FormData();
+      const name = uri.split("/").pop() || "query.m4a";
+      form.append("file", { uri, name, type: "audio/m4a" } as any);
+      const res = await fetch(`${API}/reels/voice-search`, { method: "POST", body: form });
+      if (!res.ok) throw new Error("search failed");
+      const data = await res.json();
+      onResult(data.transcript, data.category, data.reels);
+    } catch {
+      setPhase("error");
+      setErrMsg("Sorry, I couldn't hear that clearly. Please try again or type below.");
+    }
+  };
+
+  const searchText = async (q: string) => {
+    if (!q.trim()) return;
+    setPhase("processing");
+    try {
+      const res = await fetch(`${API}/reels/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q }),
+      });
+      const data = await res.json();
+      onResult(data.transcript, data.category, data.reels);
+    } catch {
+      setPhase("error");
+      setErrMsg("Something went wrong. Please try again.");
+    }
+  };
+
+  const isRecording = phase === "recording" && recorderState.isRecording;
+
+  return (
+    <View style={styles.voiceBackdrop} testID="voice-search-overlay">
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.voiceSheet}
+      >
+        <View style={styles.voiceHandle} />
+        <View style={styles.voiceHeader}>
+          <View style={styles.voiceMicWrap}>
+            <Ionicons name="search" size={24} color={theme.colors.brand} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.voiceTitle}>What would you like to watch?</Text>
+            <Text style={styles.voiceSub}>Tap the microphone and just say it</Text>
+          </View>
+          <Pressable onPress={onClose} hitSlop={12} testID="voice-search-close">
+            <Ionicons name="close" size={28} color={theme.colors.onSurface} />
+          </Pressable>
+        </View>
+
+        {/* Big mic */}
+        <View style={styles.micArea}>
+          {phase === "processing" ? (
+            <View style={styles.micBig}>
+              <ActivityIndicator size="large" color="#fff" />
+            </View>
+          ) : (
+            <Pressable
+              style={[styles.micBig, isRecording && styles.micBigActive]}
+              onPress={isRecording ? stopAndSearch : startRecording}
+              testID="mic-record-btn"
+            >
+              <Ionicons name={isRecording ? "stop" : "mic"} size={48} color="#fff" />
+            </Pressable>
+          )}
+          <Text style={styles.micHint}>
+            {phase === "processing"
+              ? "Finding videos for you..."
+              : isRecording
+              ? "Listening... tap to finish"
+              : "Tap to speak"}
+          </Text>
+        </View>
+
+        {phase === "denied" && (
+          <View style={styles.searchNote}>
+            <Text style={styles.searchNoteText}>
+              Microphone is off. Please allow the microphone in Settings, or type your request below.
+            </Text>
+            <Pressable style={styles.settingsBtn} onPress={() => Linking.openSettings()} testID="open-settings-btn">
+              <Text style={styles.settingsBtnText}>Open Settings</Text>
+            </Pressable>
+          </View>
+        )}
+        {phase === "error" && (
+          <View style={styles.searchNote}>
+            <Text style={styles.searchNoteText}>{errMsg}</Text>
+          </View>
+        )}
+
+        {/* Examples */}
+        <View style={styles.suggestionsRow}>
+          {examples.map((s) => (
+            <Pressable key={s} style={styles.suggestion} onPress={() => searchText(s)} testID={`example-${s}`}>
+              <Text style={styles.suggestionText}>{s}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* Type fallback */}
+        <View style={styles.voiceInputRow}>
+          <TextInput
+            style={styles.voiceInput}
+            placeholder="Or type here..."
+            placeholderTextColor={theme.colors.muted}
+            value={typed}
+            onChangeText={setTyped}
+            onSubmitEditing={() => searchText(typed)}
+            returnKeyType="search"
+            testID="search-text-input"
+          />
+          <Pressable
+            style={[styles.voiceSend, !typed.trim() && { opacity: 0.5 }]}
+            onPress={() => searchText(typed)}
+            disabled={!typed.trim()}
+            testID="search-text-send"
+          >
+            <Ionicons name="arrow-forward" size={22} color="#fff" />
+          </Pressable>
+        </View>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+
 function formatK(n: number) {
   if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k";
   return String(n);
@@ -420,8 +656,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   topScrim: { position: "absolute", top: 0, left: 0, right: 0, paddingBottom: 12 },
-  topRow: { alignItems: "center", marginBottom: 12 },
+  topRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 16, marginBottom: 12 },
   forYou: { color: "#fff", fontSize: 22, fontWeight: "800" },
+  searchBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    borderWidth: 1.5, borderColor: "rgba(255,255,255,0.55)",
+    alignItems: "center", justifyContent: "center",
+  },
+  searchPillRow: { paddingHorizontal: 16 },
+  searchPill: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    alignSelf: "flex-start",
+    backgroundColor: theme.colors.brand,
+    paddingLeft: 14, paddingRight: 10, height: 40,
+    borderRadius: 999, maxWidth: "100%",
+  },
+  searchPillText: { color: "#fff", fontSize: 15, fontWeight: "700", flexShrink: 1 },
   chipRow: { paddingHorizontal: 16, gap: 10 },
   chip: {
     paddingHorizontal: 18,
@@ -533,4 +784,27 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   voiceAnswerText: { fontSize: 17, lineHeight: 24, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+
+  micArea: { alignItems: "center", gap: 12, paddingVertical: 8 },
+  micBig: {
+    width: 108, height: 108, borderRadius: 54,
+    backgroundColor: theme.colors.brand,
+    alignItems: "center", justifyContent: "center",
+    shadowColor: theme.colors.brand,
+    shadowOpacity: 0.4, shadowRadius: 16, shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  micBigActive: { backgroundColor: theme.colors.error },
+  micHint: { fontSize: 17, fontWeight: "700", color: theme.colors.onSurface },
+  searchNote: {
+    backgroundColor: theme.colors.brandLight,
+    borderRadius: 16, padding: 14, gap: 10,
+  },
+  searchNoteText: { fontSize: 15, lineHeight: 21, color: theme.colors.onSurface, fontWeight: "500" },
+  settingsBtn: {
+    alignSelf: "flex-start",
+    backgroundColor: theme.colors.brand,
+    paddingHorizontal: 18, paddingVertical: 10, borderRadius: 999,
+  },
+  settingsBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
 });
