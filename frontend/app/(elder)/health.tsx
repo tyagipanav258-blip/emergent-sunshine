@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useFocusEffect } from "expo-router";
 import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, TextInput, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { GradientFill } from "@/src/components/GradientFill";
@@ -65,7 +66,18 @@ export default function ElderHealth() {
   // Hide the floating buttons whenever a sheet is open, so they never sit on
   // top of its controls.
   const anySheetOpen = Boolean(ocr.open || concierge.open || undo || remove || explain || stepsOpen || assign);
-  useEffect(() => { setChromeSuppressed(anySheetOpen); }, [anySheetOpen, setChromeSuppressed]);
+  // Tabs stay mounted when you switch away, so suppression has to follow focus
+  // as well as the sheet. Without this, opening a sheet here and tapping another
+  // tab leaves the floating buttons invisible and dead on every other screen.
+  const [focused, setFocused] = useState(true);
+  useFocusEffect(useCallback(() => {
+    setFocused(true);
+    return () => setFocused(false);
+  }, []));
+  useEffect(() => {
+    setChromeSuppressed(focused && anySheetOpen);
+  }, [focused, anySheetOpen, setChromeSuppressed]);
+  useEffect(() => () => setChromeSuppressed(false), [setChromeSuppressed]);
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2500); };
 

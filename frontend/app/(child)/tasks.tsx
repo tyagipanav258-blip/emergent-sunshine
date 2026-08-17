@@ -16,9 +16,14 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   requested: { label: "Requested", color: theme.colors.marigoldDark },
   approved: { label: "Approved", color: theme.colors.info },
   in_progress: { label: "In progress", color: theme.colors.brand },
+  awaiting_operator: { label: "Sunshine is arranging it", color: theme.colors.info },
+  awaiting_payment: { label: "Bill to settle", color: theme.colors.marigoldDark },
   done: { label: "Done", color: theme.colors.success },
   declined: { label: "Declined", color: theme.colors.error },
 };
+
+/** What the family can only watch: Sunshine has it, and nothing is owed yet. */
+const WITH_SUNSHINE = ["awaiting_operator", "awaiting_payment"];
 
 export default function ChildTasks() {
   const insets = useSafeAreaInsets();
@@ -45,6 +50,10 @@ export default function ChildTasks() {
   };
 
   const pending = tasks.filter((t) => ["requested", "approved", "in_progress"].includes(t.status));
+  // Requests the elder handed to the concierge instead of the family. There is
+  // nothing to approve, but they used to vanish from this screen entirely
+  // between "Sunshine is on it" and "done".
+  const withSunshine = tasks.filter((t) => WITH_SUNSHINE.includes(t.status));
   const doneTasks = tasks.filter((t) => ["done", "declined"].includes(t.status));
 
   return (
@@ -105,6 +114,27 @@ export default function ChildTasks() {
                     </Pressable>
                   )}
                 </View>
+              </View>
+            );
+          })}
+
+          {withSunshine.length > 0 && <AppText style={styles.section}>Sunshine is handling these</AppText>}
+          {withSunshine.map((t) => {
+            const m = STATUS_META[t.status];
+            return (
+              <View key={t.id} style={styles.card} testID={`ctask-${t.id}`}>
+                <View style={styles.cardTop}>
+                  <View style={styles.kindIcon}><Ionicons name={KIND_ICON[t.kind] || "sparkles"} size={22} color={theme.colors.brand} /></View>
+                  <AppText style={[styles.cardTitle, { flex: 1 }]}>{t.title}</AppText>
+                  <View style={[styles.statusPill, { backgroundColor: m.color + "22" }]}>
+                    <AppText style={[styles.statusText, { color: m.color }]}>{m.label}</AppText>
+                  </View>
+                </View>
+                <AppText style={styles.cardDetail}>
+                  {t.status === "awaiting_payment"
+                    ? "It has been arranged. The bill is on your dashboard to approve."
+                    : "Your parent asked Sunshine to arrange this. You will see the cost before anything is paid."}
+                </AppText>
               </View>
             );
           })}

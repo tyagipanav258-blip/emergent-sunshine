@@ -22,9 +22,9 @@ export default function NotificationsScreen() {
 
   const open = (n: Notification) => {
     if (!n.read) markRead(n.id);
-    if (n.kind === "invoice" || n.kind === "task_assigned" || n.kind === "task_update") {
-      router.push("/(child)/tasks");
-    }
+    // Bills are settled on the dashboard; requests are reviewed on Tasks.
+    if (n.kind === "invoice") router.push("/(child)");
+    else if (n.kind === "task_assigned" || n.kind === "task_update") router.push("/(child)/tasks");
   };
 
   return (
