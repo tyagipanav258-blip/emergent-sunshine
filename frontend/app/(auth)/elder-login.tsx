@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/src/auth";
+import { AuthHero } from "@/src/components/AuthHero";
 import { theme } from "@/src/theme";
 
 export default function ElderLogin() {
@@ -61,14 +62,15 @@ export default function ElderLogin() {
 
   // Name step (signup only) uses a simple text input
   return (
-    <View style={[styles.root, { paddingTop: insets.top + 12 }]} testID="elder-login">
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="elder-back">
-          <Ionicons name="chevron-back" size={30} color={theme.colors.onSurface} />
-        </Pressable>
-        <AppText style={styles.headerTitle}>{mode === "login" ? "Welcome back" : "Create account"}</AppText>
-        <View style={{ width: 44 }} />
-      </View>
+    <View style={styles.root} testID="elder-login">
+      <AuthHero
+        icon="happy"
+        title={mode === "login" ? "Welcome back" : "Let's get you set up"}
+        subtitle={mode === "login" ? "Log in with your phone and PIN" : "Just your name, phone and a PIN"}
+        onBack={() => router.back()}
+        insetTop={insets.top}
+        compact
+      />
 
       {step === "name" ? (
         <ScrollView contentContainerStyle={styles.nameWrap} keyboardShouldPersistTaps="handled">
@@ -190,18 +192,15 @@ function TextField(props: any) {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: theme.colors.surface, paddingHorizontal: 24 },
-  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-  backBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  headerTitle: { fontSize: 20, fontWeight: "800", color: theme.colors.onSurface },
+  root: { flex: 1, backgroundColor: theme.colors.surface },
   bigLabel: { fontSize: 24, fontWeight: "700", color: theme.colors.onSurface, textAlign: "center", marginTop: 12 },
-  nameWrap: { gap: 20, paddingTop: 40 },
+  nameWrap: { gap: 20, paddingTop: 32, paddingHorizontal: 24 },
   textField: {
     fontSize: 24, fontWeight: "600", color: theme.colors.onSurface,
     backgroundColor: theme.colors.surfaceSecondary, borderRadius: 18,
     borderWidth: 2, borderColor: theme.colors.border, paddingHorizontal: 20, paddingVertical: 18,
   },
-  padArea: { flex: 1 },
+  padArea: { flex: 1, paddingHorizontal: 24, paddingTop: 20 },
   phoneDisplay: { fontSize: 34, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center", marginTop: 20, letterSpacing: 2, minHeight: 44 },
   pinDots: { flexDirection: "row", justifyContent: "center", gap: 20, marginTop: 28 },
   pinDot: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: theme.colors.borderStrong },
