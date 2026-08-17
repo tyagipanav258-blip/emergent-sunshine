@@ -2,18 +2,26 @@ import React from "react";
 import { View, StyleSheet, Pressable, Platform } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
-import { gradients, DIAGONAL, theme } from "@/src/theme";
+import { theme } from "@/src/theme";
+
+// A sunrise over sea and sand — the same image behind every entry screen. Built
+// as vector art rather than a photograph, because a photograph this bright
+// behind body text is how contrast dies for the exact eyes this app is for; a
+// crafted gradient holds up at every crop height and never fights the words on
+// top of it. contentPosition="top" keeps the sun anchored regardless of how
+// tall a given hero is cropped to.
+const BEACH_BG = require("../../assets/images/auth-beach.png");
 
 /**
- * The warm sunrise banner that opens every entry screen — sign-in choice,
- * elder login, family login. One visual language for "you have arrived",
- * before the screen gets down to whichever specific thing it is asking for.
+ * The banner that opens every entry screen — sign-in choice, elder login,
+ * family login. One visual language for "you have arrived", before the screen
+ * gets down to whichever specific thing it is asking for.
  *
- * Kept deliberately short on real screens: the gradient carries the welcome,
- * the cream sheet below carries the actual reading and typing, so contrast
- * never suffers where it matters for an older eye.
+ * Kept deliberately short on real screens: the image carries the welcome, the
+ * cream sheet below carries the actual reading and typing, so contrast never
+ * suffers where it matters for an older eye.
  */
 export function AuthHero({
   title,
@@ -35,12 +43,7 @@ export function AuthHero({
 }) {
   return (
     <View style={[styles.wrap, compact ? styles.wrapCompact : styles.wrapTall]} testID={testID}>
-      <LinearGradient
-        colors={gradients.sunrise as unknown as readonly [string, string, ...string[]]}
-        start={DIAGONAL.start}
-        end={DIAGONAL.end}
-        style={StyleSheet.absoluteFill}
-      />
+      <Image source={BEACH_BG} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="top" />
       {onBack && (
         <Pressable
           onPress={() => {
@@ -97,5 +100,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   titleCompact: { fontSize: 22 },
-  subtitle: { fontSize: 15, fontWeight: "600", color: "#5B4200", textAlign: "center", marginTop: 4, opacity: 0.85 },
+  // Deep ocean blue rather than the app's usual muted grey — the tone the sky
+  // and sea themselves are made of, so it reads as chosen rather than pasted on.
+  subtitle: { fontSize: 15, fontWeight: "700", color: "#0B4C7C", textAlign: "center", marginTop: 4 },
 });
