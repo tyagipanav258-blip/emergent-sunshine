@@ -529,6 +529,10 @@ DEMO_AVATARS = [
 ]
 
 
+# The parent's own face, since the family app opens with it.
+ELDER_AVATAR = "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?w=400&q=80"
+
+
 def _demo_avatar(user_id: str) -> str:
     """Stable per person, so a face does not change between refreshes."""
     return DEMO_AVATARS[hash(user_id) % len(DEMO_AVATARS)]
@@ -575,6 +579,9 @@ async def _seed_demo(elder: dict) -> dict:
                 {"id": c["id"]},
                 {"$set": {"photo_url": _demo_avatar(c["id"]), "demo_photo": True}},
             )
+    # And the parent herself, since the family app now leads with her face.
+    if not elder.get("photo_url"):
+        await db.users.update_one({"id": eid}, {"$set": {"photo_url": ELDER_AVATAR, "demo_photo": True}})
 
     # Medicines, with a week of dose history so adherence looks lived-in and the
     # missed-dose gate (which needs a prior confirmed intake) behaves normally.
@@ -1247,7 +1254,9 @@ class ConciergeIn(BaseModel):
     request: str
 
 @api.post("/concierge/request")
-async def concierge_request(b: ConciergeIn, u: dict = Depends(require_role("elder"))):
+async def concierge_request(b: ConciergeIn, u: dict = Depends(current_user)):
+    """Raise a request. Either side can: the elder asks for herself, and a family
+    member arranges something on her behalf without waiting to be asked."""
     b.request = b.request.strip()
     if not b.request:
         raise HTTPException(422, "Please tell us what you'd like us to arrange")
@@ -1274,7 +1283,17 @@ async def concierge_request(b: ConciergeIn, u: dict = Depends(require_role("elde
             detail = parsed.get("detail", b.request)
         except Exception:
             kind, title, detail = "other", b.request[:60], b.request
-    task = await _create_task(u["id"], kind if kind in {"reorder", "doctor", "transport", "other"} else "other", title, detail)
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No family account linked")
+    task = await _create_task(eid, kind if kind in {"reorder", "doctor", "transport", "other"} else "other", title, detail)
+    # A request the family raised is theirs to see through, so say who asked.
+    if u["role"] == "child":
+        await db.tasks.update_one({"id": task["id"]}, {"$set": {"raised_by": u["id"], "raised_by_name": u.get("name")}})
+        await notify_elder(eid, "task_update", "Your family is arranging something",
+                           f"{(u.get('name') or 'Your family').split(' ')[0]} is arranging: {title}.",
+                           {"task_id": task["id"]})
+        task = await db.tasks.find_one({"id": task["id"]}, {"_id": 0})
     return task
 
 
@@ -1799,6 +1818,7 @@ async def child_analytics(u: dict = Depends(require_role("child"))):
     ).sort("at", -1).to_list(20)
     return {
         "elder_name": elder["name"],
+        "elder_photo": elder.get("photo_url"),
         "location": elder.get("location") or "Not set",
         "last_active": last_active,
         "most_used_feature": most_used,
@@ -2765,14 +2785,81 @@ async def list_photos(member_id: Optional[str] = None, u: dict = Depends(current
     if member_id:
         q["from_user_id"] = member_id
     docs = await db.photos.find(q, {"_id": 0}).sort("created_at", -1).to_list(300)
-    return [
-        {"id": d["id"], "from_user_id": d["from_user_id"], "from_name": d.get("from_name"),
-         "from_role": d.get("from_role"), "caption": d.get("caption"),
-         # Sample photos point at a hosted image; real uploads stream from storage.
-         "external_url": d.get("external_url"), "demo": bool(d.get("demo")),
-         "created_at": d["created_at"], "seen": u["id"] in (d.get("seen_by") or [])}
-        for d in docs
-    ]
+    return [{**_photo_view(d, u)} for d in docs]
+
+
+# The whole vocabulary. A short list on purpose: five large targets beat a
+# keyboard of emoji for the hands this app is built for.
+REACTIONS = ["heart", "thumbs-up", "happy", "pray", "laugh"]
+
+
+def _reaction_counts(doc: dict) -> dict:
+    counts: dict = {}
+    for r in (doc.get("reactions") or []):
+        counts[r["emoji"]] = counts.get(r["emoji"], 0) + 1
+    return counts
+
+
+def _photo_view(d: dict, u: dict) -> dict:
+    reactions = d.get("reactions") or []
+    mine = next((r["emoji"] for r in reactions if r["user_id"] == u["id"]), None)
+    return {
+        "id": d["id"], "from_user_id": d["from_user_id"], "from_name": d.get("from_name"),
+        "from_role": d.get("from_role"), "caption": d.get("caption"),
+        # Sample photos point at a hosted image; real uploads stream from storage.
+        "external_url": d.get("external_url"), "demo": bool(d.get("demo")),
+        "created_at": d["created_at"], "seen": u["id"] in (d.get("seen_by") or []),
+        "reactions": _reaction_counts(d), "my_reaction": mine,
+        "reacted_by": [r.get("name") for r in reactions if r["user_id"] != u["id"]],
+    }
+
+
+class ReactIn(BaseModel):
+    emoji: str
+
+
+@api.post("/family/photos/{pid}/react")
+async def react_to_photo(pid: str, b: ReactIn, u: dict = Depends(current_user)):
+    """Tapping the same reaction again takes it back, so a mis-tap is undoable.
+
+    One reaction per person per photo: a row of counts stays readable, and it
+    keeps the sharer from being notified over and over by the same tap.
+    """
+    if b.emoji not in REACTIONS:
+        raise HTTPException(422, "Not a reaction we know")
+    eid = await elder_id_for(u)
+    doc = await db.photos.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(404, "Photo not found")
+
+    existing = next((r for r in (doc.get("reactions") or []) if r["user_id"] == u["id"]), None)
+    if existing and existing["emoji"] == b.emoji:
+        await db.photos.update_one({"id": pid}, {"$pull": {"reactions": {"user_id": u["id"]}}})
+        fresh = await db.photos.find_one({"id": pid}, {"_id": 0})
+        return {**_photo_view(fresh, u), "removed": True}
+
+    await db.photos.update_one({"id": pid}, {"$pull": {"reactions": {"user_id": u["id"]}}})
+    await db.photos.update_one({"id": pid}, {"$push": {"reactions": {
+        "user_id": u["id"], "name": u.get("name") or "", "emoji": b.emoji,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }}})
+
+    # Tell whoever shared it at most once per person, ever. Changing a heart to a
+    # smile is not news, and neither is taking one back and putting it again —
+    # without this an indecisive tap fills their inbox.
+    told = doc.get("reaction_notified") or []
+    if doc["from_user_id"] != u["id"] and u["id"] not in told:
+        await db.photos.update_one({"id": pid}, {"$addToSet": {"reaction_notified": u["id"]}})
+        who = (u.get("name") or "Someone").split(" ")[0]
+        caption = doc.get("caption")
+        await notify_users(
+            eid, [doc["from_user_id"]], "reaction", f"{who} liked your photo",
+            f"{who} reacted to \"{caption}\"." if caption else f"{who} reacted to your photo.",
+            {"photo_id": pid, "emoji": b.emoji},
+        )
+
+    fresh = await db.photos.find_one({"id": pid}, {"_id": 0})
+    return {**_photo_view(fresh, u), "removed": False}
 
 
 @api.get("/family/photos/{pid}/image")

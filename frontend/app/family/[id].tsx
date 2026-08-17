@@ -3,6 +3,7 @@ import { View, StyleSheet, FlatList, Pressable, ActivityIndicator, Platform, Dim
 import { AppText } from "@/src/components/AppText";
 import { GradientButton } from "@/src/components/GradientButton";
 import { QuickConnect } from "@/src/components/QuickConnect";
+import { PhotoReactions } from "@/src/components/PhotoReactions";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -24,6 +25,8 @@ type Photo = {
   /** Sample content is hosted; real uploads stream from our storage. */
   external_url?: string | null;
   demo?: boolean;
+  reactions?: Record<string, number>;
+  my_reaction?: string | null;
 };
 
 const photoUri = (p: Photo, token: string) =>
@@ -43,7 +46,7 @@ export default function FamilyGallery() {
   const [device, setDevice] = useState<MediaLibrary.Asset[]>([]);
   const [deviceState, setDeviceState] = useState<"idle" | "loading" | "denied" | "unsupported" | "ready">("idle");
   const [token, setToken] = useState("");
-  const [viewer, setViewer] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<Photo | null>(null);
   const [loading, setLoading] = useState(true);
   const [sharing, setSharing] = useState(false);
 
@@ -153,12 +156,13 @@ export default function FamilyGallery() {
           renderItem={({ item }) => (
             <Pressable
               style={styles.tile}
-              onPress={() => setViewer(photoUri(item, token))}
+              onPress={() => setViewer(item)}
               testID={`photo-${item.id}`}
               accessibilityRole="imagebutton"
               accessibilityLabel={item.caption || `Photo from ${item.from_name}`}
             >
               <Image source={{ uri: photoUri(item, token) }} style={styles.tileImg} contentFit="cover" />
+              <PhotoReactions photo={item} compact />
               {item.caption ? (
                 <View style={styles.captionWrap}>
                   <AppText style={styles.caption} numberOfLines={1}>{item.caption}</AppText>
@@ -209,12 +213,23 @@ export default function FamilyGallery() {
 
       {viewer && (
         <View style={styles.viewer} testID="photo-viewer">
-          <Image source={{ uri: viewer }} style={styles.viewerImg} contentFit="contain" />
+          <Image source={{ uri: photoUri(viewer, token) }} style={styles.viewerImg} contentFit="contain" />
           <Pressable style={[styles.viewerClose, { top: insets.top + 12 }]} onPress={() => setViewer(null)}
             hitSlop={12} testID="photo-viewer-close"
             accessibilityRole="button" accessibilityLabel="Close photo">
             <Ionicons name="close" size={32} color="#fff" />
           </Pressable>
+          <View style={[styles.viewerFoot, { paddingBottom: insets.bottom + 20 }]}>
+            {viewer.caption ? <AppText style={styles.viewerCaption}>{viewer.caption}</AppText> : null}
+            <AppText style={styles.viewerFrom}>Shared by {viewer.from_name}</AppText>
+            <PhotoReactions
+              photo={viewer}
+              onChange={(next) => {
+                setViewer((v) => (v ? { ...v, ...next } : v));
+                setShared((prev) => prev.map((p) => (p.id === next.id ? { ...p, ...next } : p)));
+              }}
+            />
+          </View>
         </View>
       )}
     </View>
@@ -228,6 +243,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.border,
   },
   hBtn: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  viewerFoot: {
+    position: "absolute", left: 0, right: 0, bottom: 0, gap: 10, padding: 20,
+    backgroundColor: "rgba(16,19,13,0.86)",
+  },
+  viewerCaption: { fontSize: theme.font.md, fontWeight: "800", color: "#fff" },
+  viewerFrom: { fontSize: theme.font.sm, color: "rgba(255,255,255,0.75)" },
   hTitle: { flex: 1, fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   section: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },

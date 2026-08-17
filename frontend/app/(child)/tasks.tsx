@@ -16,6 +16,7 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   requested: { label: "Requested", color: theme.colors.marigoldDark },
   approved: { label: "Approved", color: theme.colors.info },
   in_progress: { label: "In progress", color: theme.colors.brand },
+  agent_arranging: { label: "Sunshine is arranging it", color: theme.colors.info },
   awaiting_operator: { label: "Sunshine is arranging it", color: theme.colors.info },
   awaiting_payment: { label: "Bill to settle", color: theme.colors.marigoldDark },
   done: { label: "Done", color: theme.colors.success },
@@ -23,7 +24,10 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
 };
 
 /** What the family can only watch: Sunshine has it, and nothing is owed yet. */
-const WITH_SUNSHINE = ["awaiting_operator", "awaiting_payment"];
+// `agent_arranging` is the status while the concierge drafts and prices it;
+// `awaiting_operator` is the matching fulfilment stage. Match both, or the task
+// vanishes from this screen for exactly as long as Sunshine is working on it.
+const WITH_SUNSHINE = ["agent_arranging", "awaiting_operator", "awaiting_payment"];
 
 export default function ChildTasks() {
   const insets = useSafeAreaInsets();

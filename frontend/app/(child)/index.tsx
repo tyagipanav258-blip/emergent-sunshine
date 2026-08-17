@@ -8,7 +8,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAudioPlayer } from "expo-audio";
-import { apiFetch } from "@/src/api";
+import * as ImagePicker from "expo-image-picker";
+import { apiFetch, getToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useNotifications } from "@/src/hooks/use-notifications";
 import { theme, API } from "@/src/theme";
@@ -28,7 +29,7 @@ type WeeklySummary = {
 type StepWeek = { today: number; goal: number; total: number; average: number; days_active: number; goal_days: number };
 
 type Analytics = {
-  elder_name: string; location: string; last_active: string | null;
+  elder_name: string; elder_photo?: string | null; location: string; last_active: string | null;
   most_used_feature: string; medicines: any[]; low_stock_count: number;
   appointments: any[]; pending_tasks: number; missed_doses: any[]; alerts: any[];
 };
@@ -58,6 +59,8 @@ export default function ChildDashboard() {
   const notePlayer = useAudioPlayer();
   const [token, setTkn] = useState("");
   const [viewer, setViewer] = useState<string | null>(null);
+  const [sendingPhoto, setSendingPhoto] = useState(false);
+  const [concierge, setConcierge] = useState<{ open: boolean; busy?: boolean; taskId?: string; title?: string; done?: string }>({ open: false });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -90,6 +93,54 @@ export default function ChildDashboard() {
   }, [notePlayer, token]);
 
   if (loading) return <View style={[styles.root, styles.center, { paddingTop: insets.top }]}><ActivityIndicator size="large" color={theme.colors.brand} /></View>;
+
+  const parentName = (data?.elder_name || "your parent").split(" ")[0];
+
+  const openParent = () =>
+    router.push({ pathname: "/family/[id]", params: { id: user?.elder_id || "", name: data?.elder_name || "" } });
+
+  /** The action that was hardest to find: pick a photo and send it, from here. */
+  const sendPhotoToParent = async () => {
+    const res = await ImagePicker.launchImageLibraryAsync({ quality: 0.7, allowsEditing: true });
+    if (res.canceled || !res.assets?.[0]?.uri) return;
+    setSendingPhoto(true);
+    try {
+      const t = await getToken();
+      const form = new FormData();
+      const uri = res.assets[0].uri;
+      form.append("file", { uri, name: uri.split("/").pop() || "photo.jpg", type: "image/jpeg" } as any);
+      await fetch(`${API}/family/photos`, { method: "POST", headers: { Authorization: `Bearer ${t}` }, body: form });
+      await load();
+    } catch {
+      // Nothing is lost — the photo simply is not shared.
+    }
+    setSendingPhoto(false);
+  };
+
+  /** Raise a request on the parent's behalf, then choose who sees it through. */
+  const askConcierge = async (request: string) => {
+    setConcierge((c) => ({ ...c, busy: true }));
+    try {
+      const t = await apiFetch<any>("/concierge/request", { method: "POST", body: { request } });
+      setConcierge({ open: true, taskId: t.id, title: t.title });
+    } catch {
+      setConcierge({ open: true, done: "Could not raise that just now. Please try again." });
+    }
+  };
+
+  const assignConcierge = async (assignee: "family" | "concierge") => {
+    if (!concierge.taskId) return;
+    setConcierge((c) => ({ ...c, busy: true }));
+    try {
+      const r = await apiFetch<any>(`/concierge/tasks/${concierge.taskId}/assign`, {
+        method: "POST", body: { assignee },
+      });
+      setConcierge({ open: true, done: r.message });
+    } catch {
+      setConcierge({ open: true, done: "Could not send that just now." });
+    }
+    load();
+  };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="child-dashboard">
@@ -127,6 +178,58 @@ export default function ChildDashboard() {
             </Pressable>
           </View>
         </View>
+
+        {/* Reaching her comes first. These used to be buried behind the small
+            avatar in the header, which nobody found. */}
+        <View style={styles.connectCard} testID="connect-parent">
+          <Pressable
+            style={styles.connectTop}
+            onPress={openParent}
+            testID="connect-open"
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${parentName}: send a message, a voice note or a photo, and see her photos`}
+          >
+            <View style={styles.connectFace}>
+              {data?.elder_photo
+                ? <Image source={{ uri: data.elder_photo }} style={styles.connectImg} contentFit="cover" />
+                : <Ionicons name="person" size={38} color={theme.colors.brand} />}
+            </View>
+            <View style={{ flex: 1 }}>
+              <AppText style={styles.connectName}>{data?.elder_name || "Your parent"}</AppText>
+              <AppText style={styles.connectSub}>Send her something, or look through her photos</AppText>
+            </View>
+            <Ionicons name="chevron-forward" size={24} color={theme.colors.brand} />
+          </Pressable>
+
+          <View style={styles.connectActions}>
+            <ConnectAction icon="camera" label="Send a photo" busy={sendingPhoto}
+              onPress={sendPhotoToParent} testID="send-parent-photo"
+              hint={`Choose a photo from this phone and share it with ${parentName}`} />
+            <ConnectAction icon="mic" label="Voice note"
+              onPress={openParent} testID="send-parent-note"
+              hint={`Record a voice note for ${parentName}`} />
+            <ConnectAction icon="chatbubble-ellipses" label="Message"
+              onPress={openParent} testID="send-parent-message"
+              hint={`Send ${parentName} a quick message`} />
+          </View>
+        </View>
+
+        {/* Arranging something is not only the parent's to start. */}
+        <Pressable
+          style={styles.conciergeCard}
+          onPress={() => setConcierge({ open: true })}
+          testID="child-concierge"
+          accessibilityRole="button"
+          accessibilityLabel={`Ask Sunshine to arrange something for ${parentName}`}
+          accessibilityHint="Book a doctor, reorder medicine or arrange transport"
+        >
+          <View style={styles.conciergeIcon}><Ionicons name="sparkles" size={24} color={theme.colors.marigoldDark} /></View>
+          <View style={{ flex: 1 }}>
+            <AppText style={styles.conciergeTitle}>Arrange something for {parentName}</AppText>
+            <AppText style={styles.conciergeSub}>A doctor, a refill or a taxi — do it yourself or let Sunshine.</AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color={theme.colors.marigoldDark} />
+        </Pressable>
 
         {/* Status banner */}
         <View style={styles.banner} testID="last-active">
@@ -341,7 +444,92 @@ export default function ChildDashboard() {
           </Pressable>
         </View>
       )}
+
+      {concierge.open && (
+        <View style={styles.backdrop} testID="child-concierge-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setConcierge({ open: false })}
+            accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.sheetHandle} />
+
+            {concierge.done ? (
+              <>
+                <View style={styles.sheetIcon}><GradientFill tone="success" radius={34} />
+                  <Ionicons name="checkmark-circle" size={32} color="#fff" /></View>
+                <AppText style={styles.sheetTitle}>Done</AppText>
+                <AppText style={styles.sheetSub}>{concierge.done}</AppText>
+                <Pressable style={styles.sheetCancel} onPress={() => setConcierge({ open: false })}
+                  testID="child-concierge-close" accessibilityRole="button" accessibilityLabel="Close">
+                  <AppText style={styles.sheetCancelText}>Close</AppText>
+                </Pressable>
+              </>
+            ) : concierge.taskId ? (
+              <>
+                <AppText style={styles.sheetTitle}>{concierge.title}</AppText>
+                <AppText style={styles.sheetSub}>Who should take care of this?</AppText>
+                <Pressable style={styles.choice} onPress={() => assignConcierge("family")}
+                  disabled={concierge.busy} testID="child-assign-family"
+                  accessibilityRole="button" accessibilityLabel="I will arrange it myself">
+                  <View style={styles.choiceIcon}><Ionicons name="people" size={24} color={theme.colors.brand} /></View>
+                  <View style={{ flex: 1 }}>
+                    <AppText style={styles.choiceTitle}>I will do it</AppText>
+                    <AppText style={styles.choiceSub}>It stays on your Tasks list until you mark it done.</AppText>
+                  </View>
+                </Pressable>
+                <Pressable style={styles.choice} onPress={() => assignConcierge("concierge")}
+                  disabled={concierge.busy} testID="child-assign-concierge"
+                  accessibilityRole="button" accessibilityLabel="Let Sunshine arrange it">
+                  <View style={[styles.choiceIcon, { backgroundColor: theme.colors.marigoldLight }]}>
+                    <Ionicons name="sparkles" size={24} color={theme.colors.marigoldDark} /></View>
+                  <View style={{ flex: 1 }}>
+                    <AppText style={styles.choiceTitle}>Let Sunshine do it</AppText>
+                    <AppText style={styles.choiceSub}>We arrange it and show you the cost before anything is paid.</AppText>
+                  </View>
+                </Pressable>
+                <Pressable style={styles.sheetCancel} onPress={() => setConcierge({ open: false })}
+                  testID="child-assign-cancel" accessibilityRole="button" accessibilityLabel="Not now">
+                  <AppText style={styles.sheetCancelText}>Not now</AppText>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <AppText style={styles.sheetTitle}>What shall we arrange?</AppText>
+                <AppText style={styles.sheetSub}>For {parentName}.</AppText>
+                {[
+                  { icon: "medkit", label: "Book a doctor", req: "Please book a doctor appointment" },
+                  { icon: "repeat", label: "Reorder medicine", req: "Please reorder the low medicines" },
+                  { icon: "car", label: "Arrange transport", req: "Please arrange transport for the appointment" },
+                ].map((o) => (
+                  <Pressable key={o.label} style={styles.choice} onPress={() => askConcierge(o.req)}
+                    disabled={concierge.busy} testID={`child-ask-${o.label}`}
+                    accessibilityRole="button" accessibilityLabel={o.label}>
+                    <View style={styles.choiceIcon}><Ionicons name={o.icon as any} size={24} color={theme.colors.brand} /></View>
+                    <AppText style={[styles.choiceTitle, { flex: 1 }]}>{o.label}</AppText>
+                    {concierge.busy ? <ActivityIndicator color={theme.colors.brand} /> : null}
+                  </Pressable>
+                ))}
+                <Pressable style={styles.sheetCancel} onPress={() => setConcierge({ open: false })}
+                  testID="child-concierge-cancel" accessibilityRole="button" accessibilityLabel="Not now">
+                  <AppText style={styles.sheetCancelText}>Not now</AppText>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      )}
     </View>
+  );
+}
+
+function ConnectAction({ icon, label, onPress, testID, hint, busy }: any) {
+  return (
+    <Pressable style={styles.connectAction} onPress={onPress} disabled={busy}
+      testID={testID} accessibilityRole="button" accessibilityLabel={label} accessibilityHint={hint}>
+      <View style={styles.connectActionIcon}>
+        {busy ? <ActivityIndicator color={theme.colors.brand} /> : <Ionicons name={icon} size={24} color={theme.colors.brand} />}
+      </View>
+      <AppText style={styles.connectActionLabel}>{label}</AppText>
+    </Pressable>
   );
 }
 
@@ -357,6 +545,68 @@ function Stat({ icon, label, value, color }: any) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
+
+  // Reaching the parent: the first block on the screen, not a small avatar.
+  connectCard: {
+    marginHorizontal: 20, marginTop: 4, marginBottom: 14, padding: 16, gap: 14,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: 24,
+    borderWidth: 1, borderColor: theme.colors.border,
+  },
+  connectTop: { flexDirection: "row", alignItems: "center", gap: 14, minHeight: 72 },
+  connectFace: {
+    width: 68, height: 68, borderRadius: 34, overflow: "hidden",
+    backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center",
+  },
+  connectImg: { width: "100%", height: "100%" },
+  connectName: { fontSize: 21, fontWeight: "800", color: theme.colors.onSurface },
+  connectSub: { fontSize: 14, color: theme.colors.muted, marginTop: 2, lineHeight: 19 },
+  connectActions: { flexDirection: "row", gap: 10 },
+  connectAction: {
+    flex: 1, alignItems: "center", gap: 8, paddingVertical: 12, borderRadius: 18, minHeight: 88,
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  connectActionIcon: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.brandLight,
+    alignItems: "center", justifyContent: "center",
+  },
+  connectActionLabel: { fontSize: 13, fontWeight: "700", color: theme.colors.onSurface, textAlign: "center" },
+
+  conciergeCard: {
+    flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, marginBottom: 16,
+    padding: 16, borderRadius: 20, backgroundColor: theme.colors.marigoldLight,
+  },
+  conciergeIcon: {
+    width: 46, height: 46, borderRadius: 23, backgroundColor: "#fff",
+    alignItems: "center", justifyContent: "center",
+  },
+  conciergeTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface },
+  conciergeSub: { fontSize: 13.5, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 18 },
+
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  sheet: {
+    backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28,
+    padding: 20, gap: 12, alignItems: "center",
+  },
+  sheetHandle: { width: 44, height: 5, borderRadius: 3, backgroundColor: theme.colors.borderStrong },
+  sheetIcon: {
+    width: 68, height: 68, borderRadius: 34, overflow: "hidden",
+    alignItems: "center", justifyContent: "center", marginTop: 4,
+  },
+  sheetTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
+  sheetSub: { fontSize: 15, color: theme.colors.muted, textAlign: "center", lineHeight: 21 },
+  choice: {
+    flexDirection: "row", alignItems: "center", gap: 14, alignSelf: "stretch",
+    padding: 16, borderRadius: 20, backgroundColor: theme.colors.surfaceSecondary,
+    borderWidth: 1, borderColor: theme.colors.border, minHeight: 72,
+  },
+  choiceIcon: {
+    width: 46, height: 46, borderRadius: 23, backgroundColor: theme.colors.brandLight,
+    alignItems: "center", justifyContent: "center",
+  },
+  choiceTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface },
+  choiceSub: { fontSize: 13.5, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 18 },
+  sheetCancel: { alignSelf: "stretch", alignItems: "center", paddingVertical: 16, minHeight: 52, justifyContent: "center" },
+  sheetCancelText: { fontSize: 17, fontWeight: "700", color: theme.colors.onSurfaceSecondary },
   center: { alignItems: "center", justifyContent: "center" },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingVertical: 12 },
   hi: { fontSize: 16, color: theme.colors.muted, fontWeight: "600" },
