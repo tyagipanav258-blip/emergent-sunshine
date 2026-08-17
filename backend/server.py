@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from typing import List, Optional, Literal
 
 import jwt
+import httpx
 import requests
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -1448,6 +1449,154 @@ async def notify(b: NotifyIn, u: dict = Depends(current_user)):
 
 
 # ============================ SOS / IM-OKAY ============================
+# ============================ PUSH DELIVERY ============================
+# The inbox only helps someone who has already opened the app. An SOS at 3am has
+# to reach a phone that is face-down on a bedside table, so every notification is
+# also delivered to that user's registered devices through Expo's push service.
+
+EXPO_PUSH_URL = os.environ.get("EXPO_PUSH_URL", "https://exp.host/--/api/v2/push/send")
+# Expo accepts unauthenticated sends; an access token is what stops anyone who
+# learns a token from pushing to your users. Set it in production.
+EXPO_ACCESS_TOKEN = os.environ.get("EXPO_ACCESS_TOKEN", "")
+PUSH_ENABLED = os.environ.get("PUSH_ENABLED", "1") == "1"
+# Sends are fire-and-forget so an emergency response is never held up by a slow
+# third party. Tests set this to await them instead.
+PUSH_SYNC = os.environ.get("PUSH_SYNC", "0") == "1"
+EXPO_BATCH = 100  # Expo rejects larger batches.
+
+# Which alerts are allowed to wake a phone that is on silent, and which channel
+# Android should file them under. Everything else arrives quietly.
+URGENT_KINDS = {"sos", "missed_dose"}
+
+
+def _is_expo_token(token: str) -> bool:
+    return isinstance(token, str) and token.startswith(("ExponentPushToken[", "ExpoPushToken["))
+
+
+async def _devices_for(user_ids: List[str]) -> List[dict]:
+    if not user_ids:
+        return []
+    return await db.devices.find(
+        {"user_id": {"$in": user_ids}, "disabled": {"$ne": True}}, {"_id": 0}
+    ).to_list(500)
+
+
+async def _disable_token(token: str, reason: str) -> None:
+    """A token Expo has rejected will never work again — stop sending to it."""
+    await db.devices.update_one(
+        {"token": token},
+        {"$set": {"disabled": True, "disabled_reason": reason,
+                  "disabled_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+
+async def _post_expo(messages: List[dict]) -> List[dict]:
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if EXPO_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {EXPO_ACCESS_TOKEN}"
+    async with httpx.AsyncClient(timeout=15) as http:
+        r = await http.post(EXPO_PUSH_URL, json=messages, headers=headers)
+        r.raise_for_status()
+        return (r.json() or {}).get("data") or []
+
+
+async def send_push(messages: List[dict]) -> dict:
+    """Deliver a batch and retire any token Expo tells us is dead.
+
+    Never raises: a push that fails must not take an SOS or an invoice down with
+    it, because the inbox row has already been written either way.
+    """
+    sent = failed = retired = 0
+    for i in range(0, len(messages), EXPO_BATCH):
+        batch = messages[i:i + EXPO_BATCH]
+        try:
+            tickets = await _post_expo(batch)
+        except Exception:
+            logger.exception("expo push batch failed")
+            failed += len(batch)
+            continue
+        for msg, ticket in zip(batch, tickets):
+            if (ticket or {}).get("status") == "ok":
+                sent += 1
+                continue
+            failed += 1
+            detail = ((ticket or {}).get("details") or {}).get("error")
+            if detail in {"DeviceNotRegistered", "InvalidCredentials"}:
+                await _disable_token(msg["to"], detail)
+                retired += 1
+            else:
+                logger.warning("push rejected: %s", ticket)
+    return {"sent": sent, "failed": failed, "retired": retired}
+
+
+async def push_to_users(user_ids: List[str], kind: str, title: str, body: str,
+                        data: Optional[dict] = None) -> dict:
+    """Build one message per registered device and hand the batch to Expo."""
+    if not PUSH_ENABLED or not user_ids:
+        return {"sent": 0, "failed": 0, "retired": 0}
+
+    devices = await _devices_for(user_ids)
+    if not devices:
+        return {"sent": 0, "failed": 0, "retired": 0}
+
+    urgent = kind in URGENT_KINDS
+    # An unread badge is per person, so it has to be counted per person.
+    badges = {
+        uid: await db.notifications.count_documents({"to_user_id": uid, "read": False})
+        for uid in {d["user_id"] for d in devices}
+    }
+
+    messages = []
+    for d in devices:
+        token = d.get("token", "")
+        if not _is_expo_token(token):
+            continue
+        messages.append({
+            "to": token,
+            "title": title or "Sunshine",
+            "body": body,
+            "sound": "default",
+            "badge": badges.get(d["user_id"], 0),
+            "priority": "high" if urgent else "default",
+            "channelId": "urgent" if urgent else "default",
+            # iOS only shows a critical alert with an entitlement Apple grants
+            # case by case; high priority is what we can promise today.
+            "data": {"kind": kind, **(data or {})},
+        })
+    if not messages:
+        return {"sent": 0, "failed": 0, "retired": 0}
+    return await send_push(messages)
+
+
+def _dispatch_push(user_ids: List[str], kind: str, title: str, body: str,
+                   data: Optional[dict] = None) -> None:
+    """Start the send without waiting for it, unless a test asked us to wait."""
+    if not PUSH_ENABLED or not user_ids:
+        return
+    coro = push_to_users(list(user_ids), kind, title, body, data)
+    if PUSH_SYNC:
+        # Awaited by the caller in tests; see notify_users.
+        _pending_pushes.append(coro)
+        return
+    task = asyncio.create_task(coro)
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
+# Strong references, so a fire-and-forget task is not garbage collected mid-send.
+_background: set = set()
+# Only used when PUSH_SYNC is on.
+_pending_pushes: list = []
+
+
+async def drain_pushes() -> List[dict]:
+    """Await every queued send. Test-only; a no-op unless PUSH_SYNC is set."""
+    results = []
+    while _pending_pushes:
+        results.append(await _pending_pushes.pop(0))
+    return results
+
+
 # ============================ NOTIFICATION BUS ============================
 # One shape for everything either side needs to be told about, so both apps can
 # render a single inbox instead of each screen inventing its own alert.
@@ -1468,6 +1617,9 @@ async def notify_users(
         "at": now, "read": False,
     } for uid in user_ids]
     await db.notifications.insert_many(rows)
+    # The row is the record; the push is the doorbell. Written first so a push
+    # failure can never lose the notification itself.
+    _dispatch_push(user_ids, kind, title, body, data)
     return len(rows)
 
 
@@ -2252,6 +2404,74 @@ async def mark_notification_read(nid: str, u: dict = Depends(current_user)):
 async def mark_all_read(u: dict = Depends(current_user)):
     r = await db.notifications.update_many({"to_user_id": u["id"], "read": False}, {"$set": {"read": True}})
     return {"ok": True, "marked": r.modified_count}
+
+
+# ============================ DEVICES FOR PUSH ============================
+class DeviceIn(BaseModel):
+    token: str
+    platform: str = "unknown"
+    device_name: str = ""
+
+
+@api.post("/devices/register")
+async def register_device(b: DeviceIn, u: dict = Depends(current_user)):
+    """Claim a phone for this account.
+
+    Keyed on the token rather than the user, because a shared handset must stop
+    pushing to whoever signed out of it — re-registering moves the device across
+    and clears any earlier rejection.
+    """
+    token = (b.token or "").strip()
+    if not _is_expo_token(token):
+        raise HTTPException(422, "That is not an Expo push token")
+    eid = await elder_id_for(u)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.devices.update_one(
+        {"token": token},
+        {
+            "$set": {
+                "token": token, "user_id": u["id"], "elder_id": eid,
+                "platform": b.platform[:20], "device_name": b.device_name[:80],
+                "last_seen": now, "disabled": False,
+            },
+            "$setOnInsert": {"id": str(uuid.uuid4()), "created_at": now},
+            "$unset": {"disabled_reason": "", "disabled_at": ""},
+        },
+        upsert=True,
+    )
+    count = await db.devices.count_documents({"user_id": u["id"], "disabled": {"$ne": True}})
+    return {"ok": True, "devices": count}
+
+
+@api.post("/devices/unregister")
+async def unregister_device(b: DeviceIn, u: dict = Depends(current_user)):
+    """Called on sign-out, so a handed-back phone stops receiving someone's alerts."""
+    r = await db.devices.delete_one({"token": (b.token or "").strip(), "user_id": u["id"]})
+    return {"ok": True, "removed": r.deleted_count}
+
+
+@api.get("/devices")
+async def list_devices(u: dict = Depends(current_user)):
+    """What the profile screen shows: which phones will actually ring."""
+    rows = await db.devices.find(
+        {"user_id": u["id"], "disabled": {"$ne": True}},
+        {"_id": 0, "token": 0},
+    ).sort("last_seen", -1).to_list(20)
+    return {"devices": rows, "push_configured": PUSH_ENABLED}
+
+
+@api.post("/devices/test")
+async def send_test_push(u: dict = Depends(current_user)):
+    """Prove it works from the phone in your hand rather than by waiting for an
+    emergency. Sends only to the caller's own devices."""
+    devices = await _devices_for([u["id"]])
+    if not devices:
+        raise HTTPException(400, "No phone is registered for alerts yet")
+    res = await push_to_users(
+        [u["id"]], "test", "Sunshine alerts are on",
+        "This is what an alert from Sunshine looks like.", {"test": True},
+    )
+    return {"ok": res["sent"] > 0, **res}
 
 
 # ============================ SHARED PHOTOS ============================

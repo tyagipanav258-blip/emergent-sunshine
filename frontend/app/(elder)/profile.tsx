@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, Platform, ActivityIndicator, Share } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { AlertSettings } from "@/src/components/AlertSettings";
 import { GradientButton } from "@/src/components/GradientButton";
 import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
@@ -173,6 +174,10 @@ export default function ElderProfile() {
               })}
             </View>
           )}
+
+        {/* Alerts */}
+        <AppText style={styles.section}>Alerts on this phone</AppText>
+        <AlertSettings />
 
         {/* Accessibility */}
         <AppText style={styles.section}>Text size</AppText>

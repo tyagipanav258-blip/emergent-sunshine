@@ -4,6 +4,7 @@ import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { usePush } from "@/src/hooks/use-push";
 import { theme } from "@/src/theme";
 
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -16,6 +17,8 @@ const TABS: { name: string; label: string; icon: IconName; active: IconName; tes
 export default function ChildLayout() {
   const insets = useSafeAreaInsets();
   const bottom = insets.bottom > 0 ? insets.bottom : 12;
+  // An SOS from a parent has to reach this phone whether or not the app is open.
+  usePush();
   return (
     <Tabs
       screenOptions={{ headerShown: false, animation: "none" }}

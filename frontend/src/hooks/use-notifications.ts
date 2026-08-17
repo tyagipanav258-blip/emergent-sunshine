@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { apiFetch } from "@/src/api";
+import { setBadge } from "@/src/push";
 
 export type Notification = {
   id: string;
@@ -30,6 +31,9 @@ export function useNotifications() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // The number on the app icon should mean the same thing as the one in the app.
+  useEffect(() => { setBadge(unread); }, [unread]);
 
   const markRead = useCallback(async (id: string) => {
     setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));

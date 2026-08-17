@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "@/src/api";
+import { usePush } from "@/src/hooks/use-push";
 import { ScrollChromeProvider, useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
@@ -45,6 +46,8 @@ function ElderTabs() {
   const router = useRouter();
   const [sos, setSos] = useState<SosState>({ stage: "closed" });
   const { chromeVisible } = useScrollChrome();
+  // Claims this phone for alerts and routes whatever the elder taps on.
+  usePush();
 
   const askSos = () => {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { apiFetch, getToken, setToken, clearToken } from "@/src/api";
+import { unregisterPush } from "@/src/push";
 
 export type User = {
   id: string;
@@ -85,6 +86,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await afterAuth(res);
   };
   const signOut = async () => {
+    // Release the phone first: a handed-back handset must stop receiving this
+    // account's medicine reminders and emergency alerts.
+    await unregisterPush();
     await clearToken();
     setUser(null);
   };

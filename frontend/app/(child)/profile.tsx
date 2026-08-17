@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { AlertSettings } from "@/src/components/AlertSettings";
 import { GradientFill } from "@/src/components/GradientFill";
 import { GradientButton } from "@/src/components/GradientButton";
 import { Ionicons } from "@expo/vector-icons";
@@ -68,6 +69,9 @@ export default function ChildProfile() {
           ))}
         </View>
 
+        <AppText style={styles.section}>Alerts on this phone</AppText>
+        <AlertSettings testID="child-alert-settings" />
+
         <Pressable
           style={styles.logout}
           onPress={signOut}
@@ -129,6 +133,7 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: 17, fontWeight: "700", color: theme.colors.onSurface },
   rowSub: { fontSize: 14, color: theme.colors.muted, marginTop: 2 },
   divider: { height: 1, backgroundColor: theme.colors.border, marginLeft: 58 },
+  section: { fontSize: 20, fontWeight: "800", color: theme.colors.onSurface, marginHorizontal: 20, marginTop: 28, marginBottom: 12 },
   logout: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginHorizontal: 20, marginTop: 28, paddingVertical: 18, borderRadius: 999, borderWidth: 2, borderColor: theme.colors.error },
   logoutText: { fontSize: 18, fontWeight: "800", color: theme.colors.error },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
