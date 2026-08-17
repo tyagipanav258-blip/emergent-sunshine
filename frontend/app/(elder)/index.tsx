@@ -7,6 +7,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, logActivity } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useNotifications } from "@/src/hooks/use-notifications";
 import { LogoMark } from "@/src/components/Logo";
 import { theme } from "@/src/theme";
 
@@ -17,6 +18,7 @@ export default function ElderHome() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const { unread } = useNotifications();
   const [family, setFamily] = useState<FamilyMember[]>([]);
   const [news, setNews] = useState<News[]>([]);
   const [page, setPage] = useState<number | null>(0);
@@ -63,6 +65,21 @@ export default function ElderHome() {
         <AppText style={styles.headerTitle}>
           {greeting}{firstName ? `, ${firstName}` : ""}
         </AppText>
+        <Pressable
+          onPress={() => router.push("/notifications")}
+          hitSlop={10}
+          style={styles.bell}
+          testID="elder-notifications"
+          accessibilityRole="button"
+          accessibilityLabel={unread > 0 ? `Updates, ${unread} new` : "Updates"}
+        >
+          <Ionicons name="notifications-outline" size={28} color={theme.colors.onSurface} />
+          {unread > 0 && (
+            <View style={styles.badge}>
+              <AppText style={styles.badgeText}>{unread > 9 ? "9+" : unread}</AppText>
+            </View>
+          )}
+        </Pressable>
       </View>
 
       {loading ? (
@@ -104,16 +121,16 @@ export default function ElderHome() {
                     <Pressable
                       key={f.id}
                       style={styles.story}
-                      onPress={() => router.push({ pathname: "/call", params: { name: f.name, who: f.relation } })}
+                      onPress={() => router.push({ pathname: "/family/[id]", params: { id: f.id, name: f.name } })}
                       testID={`family-${f.id}`}
                       accessibilityRole="button"
-                      accessibilityLabel={`Call ${f.name}, your ${f.relation.toLowerCase()}`}
+                      accessibilityLabel={`${f.name}, your ${f.relation.toLowerCase()}. Open their photos.`}
                     >
                       <View style={styles.ring}>
                         <View style={styles.avatar}>
                           <Ionicons name="person" size={30} color={theme.colors.brand} />
                         </View>
-                        <View style={styles.badge}><Ionicons name="call" size={12} color="#fff" /></View>
+                        <View style={styles.ringBadge}><Ionicons name="images" size={12} color="#fff" /></View>
                       </View>
                       <AppText style={styles.storyName} numberOfLines={1}>{f.name.split(" ")[0]}</AppText>
                       <AppText style={styles.storyRel} numberOfLines={1}>{f.relation}</AppText>
@@ -167,11 +184,18 @@ const styles = StyleSheet.create({
     width: 68, height: 68, borderRadius: 34, backgroundColor: theme.colors.surfaceTertiary,
     alignItems: "center", justifyContent: "center",
   },
-  badge: {
+  ringBadge: {
     position: "absolute", bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12,
     backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center",
     borderWidth: 2, borderColor: theme.colors.surface,
   },
+  bell: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  badge: {
+    position: "absolute", top: 4, right: 2, minWidth: 20, height: 20, borderRadius: 10,
+    paddingHorizontal: 5, backgroundColor: theme.colors.error,
+    alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: theme.colors.surface,
+  },
+  badgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
   storyName: { marginTop: 8, fontSize: theme.font.sm, fontWeight: "700", color: theme.colors.onSurface },
   storyRel: { fontSize: theme.font.xs, color: theme.colors.muted },
   inviteCard: {

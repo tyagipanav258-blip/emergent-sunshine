@@ -17,6 +17,7 @@ type Action =
   | { type: "sos"; confirm?: boolean }
   | { type: "voice_note"; target: string; target_name: string }
   | { type: "invite" }
+  | { type: "choose_assignee"; task_id: string; title: string; has_family: boolean }
   | null;
 
 type Msg = { role: "user" | "assistant"; text: string; action?: Action; executed?: string | null };
@@ -63,6 +64,7 @@ export default function AssistantScreen() {
   const [note, setNote] = useState<NoteState>(null);
   const [confirmHeard, setConfirmHeard] = useState("");
   const [sos, setSos] = useState<SosResult | null>(null);
+  const [assign, setAssign] = useState<{ taskId: string; title: string; hasFamily: boolean; busy?: boolean } | null>(null);
 
   const firstName = user?.name?.split(" ")[0] || "";
 
@@ -77,6 +79,8 @@ export default function AssistantScreen() {
       setPending({ kind: "sos" });
     } else if (action.type === "voice_note") {
       setNote({ stage: "idle", toId: action.target, toName: action.target_name });
+    } else if (action.type === "choose_assignee") {
+      setAssign({ taskId: action.task_id, title: action.title, hasFamily: action.has_family });
     }
   }, []);
 
@@ -234,6 +238,21 @@ export default function AssistantScreen() {
     if (note?.stage === "recording") await rec.stop();
     setNote(null);
   }, [note, rec]);
+
+  const chooseAssignee = useCallback(async (assignee: "family" | "concierge") => {
+    if (!assign) return;
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    setAssign({ ...assign, busy: true });
+    try {
+      const r = await apiFetch<any>(`/concierge/tasks/${assign.taskId}/assign`, { method: "POST", body: { assignee } });
+      setMessages((prev) => [...prev, { role: "assistant", text: r.message, executed: `${assign.title} — arranged` }]);
+      speech.speak(r.message);
+    } catch {
+      setMessages((prev) => [...prev, { role: "assistant", text: "I couldn't send that. Please try again." }]);
+    }
+    setAssign(null);
+    scrollEnd();
+  }, [assign, speech, scrollEnd]);
 
   useEffect(() => () => speech.stop(), [speech]);
 
@@ -410,6 +429,52 @@ export default function AssistantScreen() {
         </View>
       )}
 
+      {/* Who should take care of a spoken request */}
+      {assign && (
+        <View style={styles.backdrop} testID="assistant-assign-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !assign.busy && setAssign(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            {assign.busy ? (
+              <View style={{ alignItems: "center", gap: 12, paddingVertical: 24 }}>
+                <ActivityIndicator size="large" color={theme.colors.brand} />
+                <AppText style={styles.sheetSub}>Just a moment...</AppText>
+              </View>
+            ) : (
+              <>
+                <AppText style={styles.sheetTitle}>{assign.title}</AppText>
+                <AppText style={styles.sheetSub}>Who would you like to take care of this?</AppText>
+                <Pressable
+                  style={[styles.confirmBtn, !assign.hasFamily && { opacity: 0.5 }]}
+                  disabled={!assign.hasFamily}
+                  onPress={() => chooseAssignee("family")}
+                  testID="assistant-assign-family"
+                  accessibilityRole="button"
+                  accessibilityLabel={assign.hasFamily ? "Ask my family to arrange it" : "Nobody is connected yet"}
+                >
+                  <Ionicons name="people" size={22} color="#fff" />
+                  <AppText style={styles.confirmBtnText}>  Ask my family</AppText>
+                </Pressable>
+                <Pressable
+                  style={[styles.confirmBtn, { backgroundColor: theme.colors.marigoldDark }]}
+                  onPress={() => chooseAssignee("concierge")}
+                  testID="assistant-assign-concierge"
+                  accessibilityRole="button"
+                  accessibilityLabel="Let Sunshine arrange it. Your family approves the cost first."
+                >
+                  <Ionicons name="sparkles" size={22} color="#fff" />
+                  <AppText style={styles.confirmBtnText}>  Let Sunshine do it</AppText>
+                </Pressable>
+                <Pressable style={styles.cancelBtn} onPress={() => setAssign(null)} testID="assistant-assign-cancel"
+                  accessibilityRole="button" accessibilityLabel="Not now">
+                  <AppText style={styles.cancelBtnText}>Not now</AppText>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
       {/* Record a voice note for a family member */}
       {note && (
         <View style={styles.backdrop} testID="voice-note-sheet">
@@ -534,6 +599,14 @@ function Bubble({ msg, onAction, onInvite }: { msg: Msg; onAction: () => void; o
           accessibilityRole="button" accessibilityLabel={`Record a voice note for ${a.target_name}`}>
           <View style={styles.actionIcon}><Ionicons name="mic" size={22} color="#fff" /></View>
           <AppText style={styles.actionText}>Record for {a.target_name}</AppText>
+          <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
+        </Pressable>
+      )}
+      {a?.type === "choose_assignee" && (
+        <Pressable style={styles.actionCard} onPress={onAction} testID="assistant-assign-action"
+          accessibilityRole="button" accessibilityLabel={`Choose who arranges ${a.title}`}>
+          <View style={styles.actionIcon}><Ionicons name="clipboard" size={22} color="#fff" /></View>
+          <AppText style={styles.actionText}>Who should arrange this?</AppText>
           <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
         </Pressable>
       )}

@@ -56,6 +56,11 @@ EMERGENCY_NUMBER = "112"
 PIN_MAX_ATTEMPTS = 5
 PIN_LOCKOUT_MINUTES = 15
 
+# Prototype mode: new accounts start with a realistic set of sample records so a
+# demo is never a wall of empty states. Everything it writes is tagged demo=True
+# and can be cleared; real uploads and real data are untouched by it.
+DEMO_MODE = os.environ.get("DEMO_MODE", "1") == "1"
+
 GEMINI = ("gemini", "gemini-3.1-pro-preview")
 OPENAI_MINI = ("openai", "gpt-5.4-mini")
 AGENT_MODEL = ("gemini", "gemini-2.5-flash")
@@ -298,12 +303,25 @@ async def _record_missed_notifications(elder: dict) -> int:
         )
         if existing:
             continue
-        await db.notifications.insert_one({
-            "id": str(uuid.uuid4()), "elder_id": elder["id"], "kind": "missed_dose", "med_id": m["id"],
-            "day": day, "to": "family",
-            "message": f"{m['name']} ({m['time']}) was not marked as taken.",
-            "at": datetime.now(timezone.utc).isoformat(), "read": False,
-        })
+        contacts = await _family_contacts(elder["id"])
+        body = f"{m['name']} ({m['time']}) was not marked as taken."
+        now = datetime.now(timezone.utc).isoformat()
+        rows = [{
+            "id": str(uuid.uuid4()), "elder_id": elder["id"], "to_user_id": c["id"],
+            "kind": "missed_dose", "med_id": m["id"], "day": day,
+            "title": "A dose was missed", "message": body, "data": {"med_id": m["id"]},
+            "at": now, "read": False,
+        } for c in contacts]
+        if rows:
+            await db.notifications.insert_many(rows)
+        else:
+            # Nobody to tell yet, but keep the daily record so we don't re-check.
+            await db.notifications.insert_one({
+                "id": str(uuid.uuid4()), "elder_id": elder["id"], "to_user_id": None,
+                "kind": "missed_dose", "med_id": m["id"], "day": day,
+                "title": "A dose was missed", "message": body,
+                "at": now, "read": False,
+            })
         written += 1
     return written
 
@@ -371,7 +389,12 @@ async def elder_signup(b: ElderSignup):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(u.copy())
-    return {"access_token": make_token(u["id"], "elder"), "user": public_user(u)}
+    if DEMO_MODE:
+        try:
+            await _seed_demo(u)
+        except Exception:
+            logger.exception("demo seeding failed for %s", u["id"])
+    return {"access_token": make_token(u["id"], "elder"), "user": public_user(u), "demo": DEMO_MODE}
 
 
 @api.post("/auth/elder/login")
@@ -402,11 +425,19 @@ async def child_signup(b: ChildSignup):
     await db.users.insert_one(u.copy())
     # Let the elder see that someone joined, rather than discovering it silently.
     await db.notifications.insert_one({
-        "id": str(uuid.uuid4()), "elder_id": elder["id"], "kind": "family_joined", "to": "elder",
+        "id": str(uuid.uuid4()), "elder_id": elder["id"], "to_user_id": elder["id"],
+        "kind": "family_joined", "title": "Someone joined",
         "message": f"{u['name']} is now connected to your Sunshine account.",
-        "at": datetime.now(timezone.utc).isoformat(), "read": False,
+        "data": {}, "at": datetime.now(timezone.utc).isoformat(), "read": False,
     })
-    return {"access_token": make_token(u["id"], "child"), "user": public_user(u)}
+    if DEMO_MODE:
+        try:
+            # Re-run so sample photos are attributed to the person who just joined.
+            await db.photos.delete_many({"elder_id": elder["id"], "demo": True})
+            await _seed_demo(await db.users.find_one({"id": elder["id"]}, {"_id": 0}))
+        except Exception:
+            logger.exception("demo seeding failed for child %s", u["id"])
+    return {"access_token": make_token(u["id"], "child"), "user": public_user(u), "demo": DEMO_MODE}
 
 
 @api.post("/auth/child/login")
@@ -457,6 +488,180 @@ MED_IMAGES = {
     "syrup": "https://images.unsplash.com/photo-1635166304271-04931640a450?w=200&q=80",
     "drops": "https://images.unsplash.com/photo-1550572017-edd951aa8f7f?w=200&q=80",
 }
+
+
+
+# ============================ DEMO / PROTOTYPE DATA ============================
+# Everything below writes records tagged demo=True so a presentation account is
+# fully populated. It is additive only: it never overwrites real records, and
+# clearing it leaves anything the user actually created in place.
+DEMO_PHOTOS = [
+    ("https://images.unsplash.com/photo-1503919545889-aef636e10ad4?w=900&q=80", "First day of school!"),
+    ("https://images.unsplash.com/photo-1609220136736-443140cffec6?w=900&q=80", "Sunday lunch together"),
+    ("https://images.unsplash.com/photo-1519457431-44ccd64a579b?w=900&q=80", "She drew this for you"),
+    ("https://images.unsplash.com/photo-1444210971048-6130cf0c46cf?w=900&q=80", "The garden is blooming"),
+]
+
+DEMO_MEDICINES = [
+    {"name": "Amlodipine", "dose": "5 mg", "time": "8:00 AM", "type": "tablet", "per_day": 1, "stock": 24},
+    {"name": "Metformin", "dose": "500 mg", "time": "1:00 PM", "type": "tablet", "per_day": 2, "stock": 5},
+    {"name": "Vitamin D3", "dose": "1 capsule", "time": "8:00 PM", "type": "capsule", "per_day": 1, "stock": 30},
+]
+
+DEMO_STEPS = [4200, 3100, 5400, 2800, 6100, 3600, 2450]
+
+
+async def _seed_demo(elder: dict) -> dict:
+    """Populate one elder account with believable sample records."""
+    eid = elder["id"]
+    now = datetime.now(timezone.utc)
+    today = elder_now(elder).date()
+    created = {"medicines": 0, "appointments": 0, "steps": 0, "photos": 0, "tasks": 0, "invoices": 0}
+
+    # Medicines, with a week of dose history so adherence looks lived-in and the
+    # missed-dose gate (which needs a prior confirmed intake) behaves normally.
+    if not await db.medicines.count_documents({"elder_id": eid}):
+        for spec in DEMO_MEDICINES:
+            mid = str(uuid.uuid4())
+            await db.medicines.insert_one({
+                "id": mid, "elder_id": eid, **spec,
+                "image": MED_IMAGES.get(spec["type"], MED_IMAGES["tablet"]),
+                "created_at": now.isoformat(), "demo": True,
+            })
+            created["medicines"] += 1
+            for back in range(1, 7):
+                if back == 3:
+                    continue  # one missed day, so the family view isn't uniformly perfect
+                d = (today - timedelta(days=back)).strftime("%Y-%m-%d")
+                await db.intakes.insert_one({
+                    "id": str(uuid.uuid4()), "elder_id": eid, "medicine_id": mid, "day": d,
+                    "scheduled": spec["time"], "taken_at": (now - timedelta(days=back)).isoformat(),
+                    "demo": True,
+                })
+        # Today: the first is already taken, the rest still due.
+        first = await db.medicines.find_one({"elder_id": eid}, {"_id": 0})
+        if first:
+            await db.intakes.insert_one({
+                "id": str(uuid.uuid4()), "elder_id": eid, "medicine_id": first["id"],
+                "day": elder_day(elder), "scheduled": first["time"],
+                "taken_at": now.isoformat(), "demo": True,
+            })
+
+    if not await db.appointments.count_documents({"elder_id": eid}):
+        for a in [
+            {"doctor": "Dr. Anita Rao", "specialty": "General Physician", "date": "Tomorrow",
+             "time": "10:30 AM", "place": "Sunshine Clinic, Jayanagar"},
+            {"doctor": "Dr. Vikram Menon", "specialty": "Cardiologist", "date": "Next Friday",
+             "time": "4:00 PM", "place": "Apollo Hospital"},
+        ]:
+            await db.appointments.insert_one({
+                "id": str(uuid.uuid4()), "elder_id": eid, **a, "status": "confirmed", "demo": True,
+            })
+            created["appointments"] += 1
+
+    if not await db.steps.count_documents({"elder_id": eid}):
+        for i, n in enumerate(DEMO_STEPS):
+            d = (today - timedelta(days=len(DEMO_STEPS) - 1 - i)).strftime("%Y-%m-%d")
+            await db.steps.insert_one({
+                "elder_id": eid, "day": d, "steps": n, "source": "demo",
+                "updated_at": now.isoformat(), "demo": True,
+            })
+            created["steps"] += 1
+
+    if not await db.photos.count_documents({"elder_id": eid}):
+        contacts = await _family_contacts(eid)
+        for i, (url, caption) in enumerate(DEMO_PHOTOS):
+            sender = contacts[i % len(contacts)] if contacts else None
+            await db.photos.insert_one({
+                "id": str(uuid.uuid4()), "elder_id": eid,
+                "from_user_id": sender["id"] if sender else eid,
+                "from_name": sender["name"] if sender else elder.get("name"),
+                "from_role": "child" if sender else "elder",
+                "caption": caption, "external_url": url, "storage_path": None, "ext": "jpg",
+                "created_at": (now - timedelta(days=i)).isoformat(),
+                "deleted": False, "seen_by": [], "demo": True,
+            })
+            created["photos"] += 1
+
+    if not await db.tasks.count_documents({"elder_id": eid}):
+        # One finished and settled, one waiting on the family — so both halves of
+        # the fulfilment flow are visible without anyone having to drive it.
+        done = await _create_task(eid, "reorder", "Reorder Metformin",
+                                  "Metformin is running low (2 days left). Please arrange a refill.",
+                                  auto=True)
+        await db.tasks.update_one({"id": done["id"]}, {"$set": {
+            "assignee": "concierge", "status": "done", "fulfilment": "settled", "demo": True,
+        }})
+        inv_items = [{"label": "Metformin 500 mg (60 tablets)", "qty": 1, "amount": 340.0},
+                     {"label": "Home delivery", "qty": 1, "amount": 40.0}]
+        await db.invoices.insert_one({
+            "id": str(uuid.uuid4()), "elder_id": eid, "task_id": done["id"],
+            "title": done["title"], "items": inv_items, "total": 380.0, "currency": "INR",
+            "vendor": "Apollo Pharmacy", "reference": "AP-20481",
+            "status": "paid", "created_at": (now - timedelta(days=4)).isoformat(),
+            "paid_at": (now - timedelta(days=4)).isoformat(), "demo": True,
+        })
+        created["invoices"] += 1
+
+        pending = await _create_task(eid, "transport", "Arrange transport",
+                                     "A taxi to the cardiology appointment on Friday afternoon.")
+        await db.tasks.update_one({"id": pending["id"]}, {"$set": {
+            "assignee": "concierge", "status": "awaiting_payment", "fulfilment": "ordered", "demo": True,
+        }})
+        taxi_items = [{"label": "Taxi to Apollo Hospital and back", "qty": 1, "amount": 420.0},
+                      {"label": "Waiting charge", "qty": 1, "amount": 80.0}]
+        taxi_inv = {
+            "id": str(uuid.uuid4()), "elder_id": eid, "task_id": pending["id"],
+            "title": pending["title"], "items": taxi_items, "total": 500.0, "currency": "INR",
+            "vendor": "City Cabs", "reference": "CC-77120",
+            "status": "unpaid", "created_at": now.isoformat(), "paid_at": None, "demo": True,
+        }
+        await db.invoices.insert_one(taxi_inv)
+        await db.tasks.update_one({"id": pending["id"]}, {"$set": {"invoice_id": taxi_inv["id"], "order": taxi_items}})
+        created["invoices"] += 1
+        created["tasks"] = 2
+
+        await notify_family(eid, "invoice", "A payment is needed",
+                            f"Sunshine arranged \"{pending['title']}\" for {elder.get('name', 'your parent')}. "
+                            f"The total is \u20b9500.", {"task_id": pending["id"], "invoice_id": taxi_inv["id"]})
+
+    await db.users.update_one({"id": eid}, {"$set": {"demo_seeded": True}})
+    return created
+
+
+@api.post("/demo/seed")
+async def demo_seed(u: dict = Depends(current_user)):
+    """Fill this account with sample records for a walkthrough."""
+    if not DEMO_MODE:
+        raise HTTPException(403, "Demo mode is switched off")
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    if not elder:
+        raise HTTPException(404, "Account not found")
+    return {"ok": True, "created": await _seed_demo(elder), "demo_mode": True}
+
+
+@api.delete("/demo/seed")
+async def demo_clear(u: dict = Depends(current_user)):
+    """Remove only the sample records, leaving anything real behind."""
+    eid = await elder_id_for(u)
+    removed = {}
+    for name in ("medicines", "intakes", "appointments", "steps", "photos", "tasks", "invoices", "voice_notes"):
+        r = await db[name].delete_many({"elder_id": eid, "demo": True})
+        removed[name] = r.deleted_count
+    await db.users.update_one({"id": eid}, {"$set": {"demo_seeded": False}})
+    return {"ok": True, "removed": removed}
+
+
+@api.get("/demo/status")
+async def demo_status(u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    return {
+        "demo_mode": DEMO_MODE,
+        "seeded": bool((elder or {}).get("demo_seeded")),
+        "sample_records": await db.medicines.count_documents({"elder_id": eid, "demo": True}),
+    }
 
 
 # ============================ ACTIVITY LOG ============================
@@ -924,6 +1129,226 @@ async def list_tasks(u: dict = Depends(current_user)):
     return tasks
 
 
+# ============================ WHO DOES THE TASK ============================
+# Every request can go one of two ways: the family arranges it, or the Sunshine
+# concierge does. The concierge track is deliberately human-in-the-loop — the
+# model drafts the order, a person places it, and only then is the family asked
+# to pay. Nothing tells the elder an order exists until a human has placed it.
+ORDER_SYS = (
+    "You are preparing a shopping or booking order for an elderly person in India, "
+    "for a human operator to check and place. Return ONLY JSON: "
+    "{\"items\": [{\"label\": short item or service name, \"qty\": integer, "
+    "\"amount\": estimated price in Indian rupees as a number}], "
+    "\"note\": one short sentence for the operator}. "
+    "Give realistic Indian retail prices. Two to five items at most. "
+    "Never include anything the request did not ask for."
+)
+
+ASSIGNEES = {"family", "concierge"}
+
+
+async def _draft_order(task: dict, elder: dict) -> dict:
+    """Have the model turn a request into priced line items for a human to check."""
+    low = [m for m in await _med_views(elder) if m["low"]]
+    context = {
+        "request": task.get("detail") or task.get("title"),
+        "kind": task.get("kind"),
+        "low_stock_medicines": [{"name": m["name"], "dose": m["dose"]} for m in low],
+    }
+    fallback = {"items": [{"label": task.get("title", "Requested item"), "qty": 1, "amount": 0}],
+                "note": "Needs pricing by the operator."}
+    if not EMERGENT_LLM_KEY:
+        return fallback
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"order-{uuid.uuid4()}",
+            system_message=ORDER_SYS,
+        ).with_model(*GEMINI)
+        raw = str(await chat.send_message(UserMessage(text=json.dumps(context))))
+        mm = re.search(r"\{.*\}", raw, re.S)
+        parsed = json.loads(mm.group(0)) if mm else {}
+        items = []
+        for it in (parsed.get("items") or [])[:5]:
+            label = str(it.get("label", "")).strip()[:80]
+            if not label:
+                continue
+            items.append({
+                "label": label,
+                "qty": max(int(it.get("qty") or 1), 1),
+                "amount": round(float(it.get("amount") or 0), 2),
+            })
+        if not items:
+            return fallback
+        return {"items": items, "note": str(parsed.get("note") or "").strip()[:200]}
+    except Exception:
+        logger.exception("order drafting failed")
+        return fallback
+
+
+async def _apply_assignment(elder: dict, task: dict, assignee: str) -> dict:
+    """Route a request to the family or to Sunshine. One path, whether the choice
+    came from a tap or from something she said out loud."""
+    eid = elder["id"]
+    now = datetime.now(timezone.utc).isoformat()
+    entry = {"status": task["status"], "at": now, "by": "elder", "note": f"assigned to {assignee}"}
+    update = {"assignee": assignee, "assigned_at": now}
+    contacts = await _family_contacts(eid)
+
+    if assignee == "family":
+        if not contacts:
+            return {
+                "reply": "Nobody is connected to your account yet, so I'll take care of it myself.",
+                "executed": None, "reassigned": "concierge",
+            }
+        update["status"] = "requested"
+        await db.tasks.update_one({"id": task["id"]}, {"$set": update, "$push": {"timeline": entry}})
+        await notify_family(
+            eid, "task_assigned", "A request needs you",
+            f"{elder.get('name', 'Your parent')} asked you to arrange: {task['title']}.",
+            {"task_id": task["id"]},
+        )
+        names = ", ".join(c["name"].split(" ")[0] for c in contacts)
+        return {"reply": f"I've asked {names} to arrange it.", "executed": f"Sent to {names}", "reassigned": None}
+
+    draft = await _draft_order(task, elder)
+    update.update({"status": "agent_arranging", "draft_order": draft, "fulfilment": "awaiting_operator"})
+    await db.tasks.update_one({"id": task["id"]}, {"$set": update, "$push": {"timeline": entry}})
+    await notify_family(
+        eid, "task_assigned", "Sunshine is arranging this",
+        f"{elder.get('name', 'Your parent')} asked Sunshine to arrange: {task['title']}. "
+        f"You'll be asked to approve the cost before anything is paid for.",
+        {"task_id": task["id"]},
+    )
+    return {
+        "reply": "Leave it with me. I'll arrange it and your family will be asked to approve the cost.",
+        "executed": "Sunshine is arranging it", "reassigned": None,
+    }
+
+
+class AssignIn(BaseModel):
+    assignee: Literal["family", "concierge"]
+
+
+@api.post("/concierge/tasks/{task_id}/assign")
+async def assign_task(task_id: str, b: AssignIn, u: dict = Depends(current_user)):
+    """The elder chooses who should handle it: their family, or Sunshine."""
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    t = await db.tasks.find_one({"id": task_id, "elder_id": eid}, {"_id": 0})
+    if not t or not elder:
+        raise HTTPException(404, "Request not found")
+    if t.get("status") in {"done", "declined"}:
+        raise HTTPException(409, "That request is already finished")
+
+    out = await _apply_assignment(elder, t, b.assignee)
+    if out.get("reassigned"):
+        out = await _apply_assignment(elder, t, out["reassigned"])
+    task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    return {"task": task, "message": out["reply"]}
+
+
+class PlaceOrderIn(BaseModel):
+    """Filled in by the human operator who actually places the order."""
+    items: Optional[List[dict]] = None
+    vendor: Optional[str] = None
+    reference: Optional[str] = None
+
+
+@api.post("/concierge/tasks/{task_id}/place-order")
+async def place_order(task_id: str, b: PlaceOrderIn, u: dict = Depends(current_user)):
+    """Record that a human placed the order, and raise an invoice for the family.
+
+    This is the human half of the loop. It is a separate call on purpose: the
+    elder is never told an order exists until someone has actually placed it.
+    """
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    t = await db.tasks.find_one({"id": task_id, "elder_id": eid}, {"_id": 0})
+    if not t or not elder:
+        raise HTTPException(404, "Request not found")
+    if t.get("assignee") != "concierge":
+        raise HTTPException(409, "This request is being handled by the family")
+
+    items = b.items if b.items is not None else (t.get("draft_order") or {}).get("items") or []
+    clean = []
+    for it in items[:10]:
+        label = str(it.get("label", "")).strip()[:80]
+        if not label:
+            continue
+        clean.append({"label": label, "qty": max(int(it.get("qty") or 1), 1),
+                      "amount": round(float(it.get("amount") or 0), 2)})
+    if not clean:
+        raise HTTPException(422, "An order needs at least one item")
+    total = round(sum(i["amount"] * i["qty"] for i in clean), 2)
+    if total <= 0:
+        # An unpriced order must not become a payment request to the family.
+        raise HTTPException(422, "Price the order before placing it")
+
+    invoice = {
+        "id": str(uuid.uuid4()), "elder_id": eid, "task_id": task_id,
+        "title": t["title"], "items": clean, "total": total, "currency": "INR",
+        "vendor": (b.vendor or "Sunshine Concierge")[:80],
+        "reference": (b.reference or "")[:60],
+        "status": "unpaid", "created_at": datetime.now(timezone.utc).isoformat(), "paid_at": None,
+    }
+    await db.invoices.insert_one(invoice.copy())
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.tasks.update_one({"id": task_id}, {
+        "$set": {"status": "awaiting_payment", "fulfilment": "ordered", "invoice_id": invoice["id"], "order": clean},
+        "$push": {"timeline": {"status": "awaiting_payment", "at": now, "by": "concierge",
+                               "note": f"order placed with {invoice['vendor']}"}},
+    })
+
+    await notify_family(
+        eid, "invoice", "A payment is needed",
+        f"Sunshine arranged \"{t['title']}\" for {elder.get('name', 'your parent')}. "
+        f"The total is ₹{total:.0f}.",
+        {"task_id": task_id, "invoice_id": invoice["id"], "total": total},
+    )
+    await notify_elder(
+        eid, "task_update", "Sunshine has arranged it",
+        f"\"{t['title']}\" has been arranged. Your family has been asked to settle the cost.",
+        {"task_id": task_id},
+    )
+    invoice.pop("_id", None)
+    return {"task": await db.tasks.find_one({"id": task_id}, {"_id": 0}), "invoice": invoice}
+
+
+@api.get("/concierge/invoices")
+async def list_invoices(u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    return await db.invoices.find({"elder_id": eid}, {"_id": 0}).sort("created_at", -1).to_list(100)
+
+
+@api.post("/concierge/invoices/{invoice_id}/pay")
+async def pay_invoice(invoice_id: str, u: dict = Depends(require_role("child"))):
+    """Mark an invoice settled.
+
+    This records the payment against the request; it does not itself move money.
+    Wiring a payment provider is a separate integration.
+    """
+    eid = u.get("elder_id")
+    inv = await db.invoices.find_one({"id": invoice_id, "elder_id": eid}, {"_id": 0})
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv["status"] == "paid":
+        return inv
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.invoices.update_one({"id": invoice_id}, {"$set": {"status": "paid", "paid_at": now, "paid_by": u["id"]}})
+    await db.tasks.update_one({"id": inv["task_id"]}, {
+        "$set": {"status": "done", "fulfilment": "settled"},
+        "$push": {"timeline": {"status": "done", "at": now, "by": "child", "note": "invoice settled"}},
+    })
+    await notify_elder(
+        eid, "task_update", "All taken care of",
+        f"\"{inv['title']}\" is done and your family has settled it.",
+        {"task_id": inv["task_id"]},
+    )
+    return await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
+
+
 class TaskStatusIn(BaseModel):
     status: Literal["approved", "in_progress", "done", "declined"]
 
@@ -955,17 +1380,45 @@ async def notify(b: NotifyIn, u: dict = Depends(current_user)):
 
 
 # ============================ SOS / IM-OKAY ============================
-async def _alert_family(elder_id: str, kind: str, message: str) -> List[dict]:
-    """Write one notification per really-connected family member. Returns who got it."""
-    contacts = await _family_contacts(elder_id)
+# ============================ NOTIFICATION BUS ============================
+# One shape for everything either side needs to be told about, so both apps can
+# render a single inbox instead of each screen inventing its own alert.
+async def notify_users(
+    elder_id: str,
+    user_ids: List[str],
+    kind: str,
+    title: str,
+    body: str,
+    data: Optional[dict] = None,
+) -> int:
+    if not user_ids:
+        return 0
     now = datetime.now(timezone.utc).isoformat()
-    for c in contacts:
-        await db.notifications.insert_one({
-            "id": str(uuid.uuid4()), "elder_id": elder_id, "kind": kind,
-            "to": "family", "to_user_id": c["id"], "message": message,
-            "at": now, "read": False,
-        })
+    rows = [{
+        "id": str(uuid.uuid4()), "elder_id": elder_id, "to_user_id": uid,
+        "kind": kind, "title": title, "message": body, "data": data or {},
+        "at": now, "read": False,
+    } for uid in user_ids]
+    await db.notifications.insert_many(rows)
+    return len(rows)
+
+
+async def notify_family(elder_id: str, kind: str, title: str, body: str, data: Optional[dict] = None) -> List[dict]:
+    """Tell every connected family member. Returns who was told."""
+    contacts = await _family_contacts(elder_id)
+    await notify_users(elder_id, [c["id"] for c in contacts], kind, title, body, data)
     return contacts
+
+
+async def notify_elder(elder_id: str, kind: str, title: str, body: str, data: Optional[dict] = None) -> None:
+    """Tell the elder. The child side finally has a way to reach them in-app."""
+    await notify_users(elder_id, [elder_id], kind, title, body, data)
+
+
+async def _alert_family(elder_id: str, kind: str, message: str) -> List[dict]:
+    """Back-compat wrapper for the two safety alerts, now on the shared bus."""
+    titles = {"sos": "Emergency alert", "im_okay": "They're doing well"}
+    return await notify_family(elder_id, kind, titles.get(kind, "Sunshine"), message)
 
 
 @api.post("/sos")
@@ -1178,6 +1631,9 @@ AGENT_SYS = (
     "mark_medicine=mark an existing medicine as taken; add_medicine=add a NEW medicine to her list (she says its name, dose and time); "
     "voice_note=record and send a voice note to target; order_medicine=arrange a medicine refill; book_doctor=arrange a doctor consultation; "
     "arrange_transport=arrange a taxi; im_okay=reassure family; sos=emergency alert; answer=just answer her question. "
+    "For order_medicine, book_doctor and arrange_transport also return "
+    "\"who\": \"family\" if she said her family or a relative should do it, "
+    "\"concierge\" if she said Sunshine or you should do it, or null if she did not say. "
     "If it is a general question, use intent 'answer'. No emojis, no jargon."
 )
 
@@ -1196,7 +1652,8 @@ async def _run_agent(elder: dict, message: str) -> dict:
     contacts = await _family_contacts(eid)
     roster = ", ".join(f"{c['name']} ({c['relation']})" for c in contacts) or "nobody yet"
     parsed = {"reply": "", "intent": "answer", "name": None, "medicine": None, "dose": None,
-              "time": None, "med_type": None, "per_day": None, "message": None, "details": None}
+              "time": None, "med_type": None, "per_day": None, "message": None, "details": None,
+              "who": None}
     try:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}",
@@ -1294,21 +1751,29 @@ async def _run_agent(elder: dict, message: str) -> dict:
                 reply = f"Well done. I've marked your {target_med['name']} as taken."
         else:
             reply = reply or "All your medicines are already marked as taken. Great job!"
-    elif intent == "order_medicine":
-        await _create_task(eid, "reorder", "Reorder medicine", parsed.get("details") or "Please arrange a medicine refill.")
-        executed = "Reorder request sent to your family"
-        if not reply:
-            reply = "I've asked your family to arrange a medicine refill."
-    elif intent == "book_doctor":
-        await _create_task(eid, "doctor", "Book a doctor", parsed.get("details") or "Please book a doctor consultation.")
-        executed = "Doctor booking request sent to your family"
-        if not reply:
-            reply = "I've requested a doctor consultation for you."
-    elif intent == "arrange_transport":
-        await _create_task(eid, "transport", "Arrange transport", parsed.get("details") or "Please arrange transport.")
-        executed = "Transport request sent to your family"
-        if not reply:
-            reply = "I've asked your family to arrange transport for you."
+    elif intent in {"order_medicine", "book_doctor", "arrange_transport"}:
+        kind, title, fallback_detail = {
+            "order_medicine": ("reorder", "Reorder medicine", "Please arrange a medicine refill."),
+            "book_doctor": ("doctor", "Book a doctor", "Please book a doctor consultation."),
+            "arrange_transport": ("transport", "Arrange transport", "Please arrange transport."),
+        }[intent]
+        task = await _create_task(eid, kind, title, parsed.get("details") or fallback_detail)
+        who = parsed.get("who") if parsed.get("who") in ASSIGNEES else None
+
+        if who:
+            # She already said who should do it, so don't ask again.
+            out = await _apply_assignment(elder, task, who)
+            executed = out["executed"]
+            if not reply or who:
+                reply = out["reply"]
+        else:
+            action = {"type": "choose_assignee", "task_id": task["id"], "title": title,
+                      "has_family": bool(contacts)}
+            reply = reply or (
+                f"I can arrange {title.lower()}. Would you like your family to do it, or shall I?"
+                if contacts else
+                f"I can arrange {title.lower()} for you. Shall I go ahead?"
+            )
     elif intent == "im_okay":
         await db.events.insert_one({
             "id": str(uuid.uuid4()), "elder_id": eid, "type": "im_okay",
@@ -1644,14 +2109,24 @@ async def _speech_cache_sweep(interval_seconds: int = 1800, keep_minutes: int = 
 @api.post("/family/voice-notes")
 async def send_voice_note(
     file: UploadFile = File(...),
-    to_user_id: str = Form(...),
-    u: dict = Depends(require_role("elder")),
+    to_user_id: Optional[str] = Form(None),
+    u: dict = Depends(current_user),
 ):
-    """Store a recorded note and notify the family member it was addressed to."""
-    contacts = await _family_contacts(u["id"])
-    recipient = next((c for c in contacts if c["id"] == to_user_id), None)
-    if not recipient:
-        raise HTTPException(404, "That family member is not connected to your account")
+    """Record a note for someone in the family. Works in both directions:
+    the elder picks a family member, a family member's note goes to the elder."""
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No family account linked")
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+
+    if u["role"] == "elder":
+        contacts = await _family_contacts(eid)
+        recipient = next((c for c in contacts if c["id"] == to_user_id), None)
+        if not recipient:
+            raise HTTPException(404, "That family member is not connected to your account")
+    else:
+        # A child's note always goes to the parent.
+        recipient = {"id": eid, "name": (elder or {}).get("name") or "Your parent"}
 
     audio = await file.read()
     if not audio:
@@ -1669,31 +2144,175 @@ async def send_voice_note(
         raise HTTPException(502, f"Could not save your voice note: {e}")
 
     doc = {
-        "id": nid, "elder_id": u["id"], "from_user_id": u["id"], "from_name": u.get("name"),
-        "to_user_id": recipient["id"], "to_name": recipient["name"],
+        "id": nid, "elder_id": eid, "from_user_id": u["id"], "from_name": u.get("name"),
+        "from_role": u["role"], "to_user_id": recipient["id"], "to_name": recipient["name"],
         "storage_path": storage_path, "ext": ext, "bytes": len(audio),
         "created_at": datetime.now(timezone.utc).isoformat(), "played_at": None, "deleted": False,
     }
     await db.voice_notes.insert_one(doc.copy())
-    await db.notifications.insert_one({
-        "id": str(uuid.uuid4()), "elder_id": u["id"], "kind": "voice_note",
-        "to": "family", "to_user_id": recipient["id"], "voice_note_id": nid,
-        "message": f"{u.get('name', 'Your parent')} sent you a voice note.",
-        "at": datetime.now(timezone.utc).isoformat(), "read": False,
-    })
+
+    who = u.get("name") or "Someone in your family"
+    await notify_users(
+        eid, [recipient["id"]], "voice_note", "A new voice note",
+        f"{who} sent you a voice note.", {"voice_note_id": nid},
+    )
     return {"id": nid, "to_name": recipient["name"], "delivered": True}
+
+
+# ============================ NOTIFICATION INBOX ============================
+@api.get("/notifications")
+async def list_notifications(unread_only: bool = False, u: dict = Depends(current_user)):
+    """Everything addressed to this user, newest first."""
+    eid = await elder_id_for(u)
+    q: dict = {"elder_id": eid, "to_user_id": u["id"]}
+    if unread_only:
+        q["read"] = False
+    rows = await db.notifications.find(q, {"_id": 0}).sort("at", -1).to_list(100)
+    unread = await db.notifications.count_documents({"elder_id": eid, "to_user_id": u["id"], "read": False})
+    return {"items": rows, "unread": unread}
+
+
+@api.post("/notifications/{nid}/read")
+async def mark_notification_read(nid: str, u: dict = Depends(current_user)):
+    r = await db.notifications.update_one({"id": nid, "to_user_id": u["id"]}, {"$set": {"read": True}})
+    if not r.matched_count:
+        raise HTTPException(404, "Notification not found")
+    return {"ok": True}
+
+
+@api.post("/notifications/read-all")
+async def mark_all_read(u: dict = Depends(current_user)):
+    r = await db.notifications.update_many({"to_user_id": u["id"], "read": False}, {"$set": {"read": True}})
+    return {"ok": True, "marked": r.modified_count}
+
+
+# ============================ SHARED PHOTOS ============================
+IMAGE_EXTS = {"jpg", "jpeg", "png", "heic", "webp"}
+IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+               "heic": "image/heic", "webp": "image/webp"}
+
+
+def _image_ext(filename: Optional[str], default: str = "jpg") -> str:
+    if filename and "." in filename:
+        e = filename.rsplit(".", 1)[-1].lower()
+        if e in IMAGE_EXTS:
+            return e
+    return default
+
+
+@api.post("/family/photos")
+async def share_photo(
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    u: dict = Depends(current_user),
+):
+    """Share a photo with the rest of the family. Works in both directions."""
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No family account linked")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "Empty image")
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(413, "That photo is too large. Please choose a smaller one.")
+
+    ext = _image_ext(file.filename)
+    pid = str(uuid.uuid4())
+    storage_path = f"{APP_NAME}/photos/{eid}/{pid}.{ext}"
+    try:
+        await run_in_threadpool(put_object, storage_path, data, IMAGE_TYPES.get(ext, "image/jpeg"))
+    except Exception as e:
+        logger.exception("photo upload failed")
+        raise HTTPException(502, f"Could not save the photo: {e}")
+
+    doc = {
+        "id": pid, "elder_id": eid, "from_user_id": u["id"], "from_name": u.get("name"),
+        "from_role": u["role"], "caption": (caption or "").strip()[:200],
+        "storage_path": storage_path, "ext": ext,
+        "created_at": datetime.now(timezone.utc).isoformat(), "deleted": False,
+        "seen_by": [],
+    }
+    await db.photos.insert_one(doc.copy())
+
+    who = u.get("name") or ("Your parent" if u["role"] == "elder" else "Your family")
+    caption_line = f" — “{doc['caption']}”" if doc["caption"] else ""
+    if u["role"] == "elder":
+        await notify_family(eid, "photo", "A new photo", f"{who} shared a photo with you{caption_line}.", {"photo_id": pid})
+    else:
+        await notify_elder(eid, "photo", "A new photo", f"{who} shared a photo with you{caption_line}.", {"photo_id": pid})
+        # Other family members see it too.
+        others = [c["id"] for c in await _family_contacts(eid) if c["id"] != u["id"]]
+        await notify_users(eid, others, "photo", "A new photo", f"{who} shared a photo{caption_line}.", {"photo_id": pid})
+
+    return {"id": pid, "caption": doc["caption"], "created_at": doc["created_at"]}
+
+
+@api.get("/family/photos")
+async def list_photos(member_id: Optional[str] = None, u: dict = Depends(current_user)):
+    """Every photo shared in this family, or just those from one person."""
+    eid = await elder_id_for(u)
+    q: dict = {"elder_id": eid, "deleted": {"$ne": True}}
+    if member_id:
+        q["from_user_id"] = member_id
+    docs = await db.photos.find(q, {"_id": 0}).sort("created_at", -1).to_list(300)
+    return [
+        {"id": d["id"], "from_user_id": d["from_user_id"], "from_name": d.get("from_name"),
+         "from_role": d.get("from_role"), "caption": d.get("caption"),
+         # Sample photos point at a hosted image; real uploads stream from storage.
+         "external_url": d.get("external_url"), "demo": bool(d.get("demo")),
+         "created_at": d["created_at"], "seen": u["id"] in (d.get("seen_by") or [])}
+        for d in docs
+    ]
+
+
+@api.get("/family/photos/{pid}/image")
+async def photo_image(
+    pid: str,
+    token: Optional[str] = Query(None),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+):
+    u = await _user_for_media(token, creds)
+    eid = await elder_id_for(u)
+    doc = await db.photos.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(404, "Photo not found")
+    if doc.get("external_url") and not doc.get("storage_path"):
+        # Sample content lives on a public URL rather than in our storage.
+        return Response(status_code=307, headers={"Location": doc["external_url"]})
+    try:
+        content, ctype = await run_in_threadpool(get_object, doc["storage_path"])
+    except Exception:
+        raise HTTPException(404, "Photo not available")
+    if u["id"] not in (doc.get("seen_by") or []):
+        await db.photos.update_one({"id": pid}, {"$addToSet": {"seen_by": u["id"]}})
+    return Response(content=content, media_type=ctype or IMAGE_TYPES.get(doc.get("ext", "jpg"), "image/jpeg"))
+
+
+@api.delete("/family/photos/{pid}")
+async def delete_photo(pid: str, u: dict = Depends(current_user)):
+    """Only the person who shared it can take it down."""
+    eid = await elder_id_for(u)
+    doc = await db.photos.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(404, "Photo not found")
+    if doc["from_user_id"] != u["id"]:
+        raise HTTPException(403, "Only the person who shared this photo can remove it")
+    await db.photos.update_one({"id": pid}, {"$set": {"deleted": True}})
+    return {"ok": True}
 
 
 @api.get("/family/voice-notes")
 async def list_voice_notes(u: dict = Depends(current_user)):
     """Elders see what they sent; family members see what was sent to them."""
     eid = await elder_id_for(u)
-    q = {"elder_id": eid, "deleted": {"$ne": True}}
-    if u["role"] == "child":
-        q["to_user_id"] = u["id"]
+    q = {
+        "elder_id": eid, "deleted": {"$ne": True},
+        "$or": [{"to_user_id": u["id"]}, {"from_user_id": u["id"]}],
+    }
     docs = await db.voice_notes.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
     return [
-        {"id": d["id"], "from_name": d.get("from_name"), "to_name": d.get("to_name"),
+        {"id": d["id"], "from_user_id": d.get("from_user_id"), "from_name": d.get("from_name"),
+         "to_name": d.get("to_name"), "mine": d.get("from_user_id") == u["id"],
          "created_at": d["created_at"], "played_at": d.get("played_at")}
         for d in docs
     ]
@@ -1707,17 +2326,17 @@ async def voice_note_audio(
 ):
     u = await _user_for_media(token, creds)
     eid = await elder_id_for(u)
-    q = {"id": nid, "elder_id": eid, "deleted": {"$ne": True}}
-    if u["role"] == "child":
-        q["to_user_id"] = u["id"]
-    doc = await db.voice_notes.find_one(q)
+    doc = await db.voice_notes.find_one({
+        "id": nid, "elder_id": eid, "deleted": {"$ne": True},
+        "$or": [{"to_user_id": u["id"]}, {"from_user_id": u["id"]}],
+    })
     if not doc:
         raise HTTPException(404, "Voice note not found")
     try:
         content, ctype = await run_in_threadpool(get_object, doc["storage_path"])
     except Exception:
         raise HTTPException(404, "Recording not available")
-    if u["role"] == "child" and not doc.get("played_at"):
+    if doc.get("to_user_id") == u["id"] and not doc.get("played_at"):
         await db.voice_notes.update_one({"id": nid}, {"$set": {"played_at": datetime.now(timezone.utc).isoformat()}})
     return Response(content=content, media_type=ctype or AUDIO_TYPES.get(doc.get("ext", "m4a"), "audio/m4a"))
 

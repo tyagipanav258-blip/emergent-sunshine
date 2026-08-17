@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform } from "react-native";
+import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform, Share } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -117,6 +117,9 @@ function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active:
         </Pressable>
         <Pressable
           style={styles.railBtn}
+          onPress={() =>
+            Share.share({ message: `${reel.title} — ${reel.description}\n\nShared from Sunshine` }).catch(() => {})
+          }
           testID={`share-${reel.id}`}
           accessibilityRole="button"
           accessibilityLabel="Share this video"

@@ -42,12 +42,16 @@ export default function ElderHealth() {
   const [removing, setRemoving] = useState(false);
   const [explain, setExplain] = useState<{ med: Med; busy: boolean; data?: Explainer; error?: string } | null>(null);
   const [stepsOpen, setStepsOpen] = useState(false);
+  const [assign, setAssign] = useState<{ taskId: string; title: string; busy?: boolean; done?: string } | null>(null);
+  const [family, setFamily] = useState<{ id: string; name: string }[]>([]);
   const steps = useSteps();
 
   const load = useCallback(async () => {
     try {
       const d = await apiFetch<any>("/health/overview");
       setMeds(d.medicines); setAppts(d.appointments); setGreeting(d.greeting); setName(d.name); setMissed(d.missed || []);
+      apiFetch<{ members: { id: string; name: string }[] }>("/family")
+        .then((f) => setFamily(f.members || [])).catch(() => {});
     } catch {}
     setLoading(false);
   }, []);
@@ -140,15 +144,34 @@ export default function ElderHealth() {
     load();
   };
 
+  /**
+   * Creating a request no longer finishes it — the elder still has to say who
+   * should do it, so nothing is silently dropped on the family.
+   */
   const sendConcierge = async (preset?: string) => {
     const text = preset || concierge.text;
     if (!text.trim()) return;
     setConcierge((c) => ({ ...c, busy: true }));
     try {
       const t = await apiFetch<any>("/concierge/request", { method: "POST", body: { request: text } });
-      setConcierge({ open: true, text: "", done: t.title });
+      setConcierge({ open: false, text: "" });
+      setAssign({ taskId: t.id, title: t.title });
     } catch {
       setConcierge((c) => ({ ...c, busy: false }));
+    }
+  };
+
+  const chooseAssignee = async (assignee: "family" | "concierge") => {
+    if (!assign) return;
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    setAssign({ ...assign, busy: true });
+    try {
+      const r = await apiFetch<any>(`/concierge/tasks/${assign.taskId}/assign`, {
+        method: "POST", body: { assignee },
+      });
+      setAssign({ ...assign, busy: false, done: r.message });
+    } catch {
+      setAssign({ ...assign, busy: false, done: "We couldn't send that. Please try again." });
     }
   };
 
@@ -176,18 +199,15 @@ export default function ElderHealth() {
         >
           <View style={styles.stepsIcon}><Ionicons name="walk" size={30} color={theme.colors.brand} /></View>
           <View style={{ flex: 1 }}>
-            {steps.available === false ? (
+            {/* A count already synced from a phone is worth showing even where
+                this device has no sensor of its own. */}
+            {(steps.available === false || steps.denied) && steps.today === 0 ? (
               <>
                 <AppText style={styles.stepsLabel}>Steps today</AppText>
                 <AppText style={styles.stepsUnavailable}>
-                  This device can&apos;t count steps. Your weekly history still shows here.
-                </AppText>
-              </>
-            ) : steps.denied ? (
-              <>
-                <AppText style={styles.stepsLabel}>Steps today</AppText>
-                <AppText style={styles.stepsUnavailable}>
-                  Allow motion access to count your steps.
+                  {steps.denied
+                    ? "Allow motion access to count your steps."
+                    : "This device can't count steps. Your weekly history still shows here."}
                 </AppText>
               </>
             ) : (
@@ -460,6 +480,86 @@ export default function ElderHealth() {
         </View>
       )}
 
+      {/* Who should do it: the family, or Sunshine? */}
+      {assign && (
+        <View style={styles.backdrop} testID="assign-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !assign.busy && setAssign(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+
+            {assign.done ? (
+              <>
+                <View style={styles.sosDone}><Ionicons name="checkmark" size={40} color="#fff" /></View>
+                <AppText style={styles.sheetTitle}>All set</AppText>
+                <AppText style={styles.sheetSub}>{assign.done}</AppText>
+                <Pressable style={styles.primaryBtn} onPress={() => setAssign(null)} testID="assign-done"
+                  accessibilityRole="button" accessibilityLabel="Close">
+                  <AppText style={styles.primaryBtnText}>OK</AppText>
+                </Pressable>
+              </>
+            ) : assign.busy ? (
+              <View style={{ alignItems: "center", gap: 12, paddingVertical: 24 }}>
+                <ActivityIndicator size="large" color={theme.colors.brand} />
+                <AppText style={styles.sheetSub}>Just a moment...</AppText>
+              </View>
+            ) : (
+              <>
+                <AppText style={styles.sheetTitle}>{assign.title}</AppText>
+                <AppText style={styles.sheetSub}>Who would you like to take care of this?</AppText>
+
+                <Pressable
+                  style={[styles.choiceCard, family.length === 0 && styles.choiceDisabled]}
+                  onPress={() => family.length > 0 && chooseAssignee("family")}
+                  disabled={family.length === 0}
+                  testID="assign-family"
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    family.length > 0
+                      ? `Ask my family. ${family.map((f) => f.name).join(", ")} will be told.`
+                      : "Ask my family. Nobody is connected yet."
+                  }
+                >
+                  <View style={styles.choiceIcon}><Ionicons name="people" size={26} color={theme.colors.brand} /></View>
+                  <View style={{ flex: 1 }}>
+                    <AppText style={styles.choiceTitle}>Ask my family</AppText>
+                    <AppText style={styles.choiceSub}>
+                      {family.length > 0
+                        ? `${family.map((f) => f.name.split(" ")[0]).join(", ")} will arrange it. No cost through Sunshine.`
+                        : "Nobody is connected yet. Share your family code first."}
+                    </AppText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={22} color={theme.colors.brand} />
+                </Pressable>
+
+                <Pressable
+                  style={styles.choiceCard}
+                  onPress={() => chooseAssignee("concierge")}
+                  testID="assign-concierge"
+                  accessibilityRole="button"
+                  accessibilityLabel="Let Sunshine arrange it. Your family will be asked to approve the cost before anything is paid for."
+                >
+                  <View style={[styles.choiceIcon, { backgroundColor: theme.colors.marigoldLight }]}>
+                    <Ionicons name="sparkles" size={26} color={theme.colors.marigoldDark} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <AppText style={styles.choiceTitle}>Let Sunshine do it</AppText>
+                    <AppText style={styles.choiceSub}>
+                      We arrange it for you. Your family sees the cost and approves it before anything is paid.
+                    </AppText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={22} color={theme.colors.marigoldDark} />
+                </Pressable>
+
+                <Pressable style={styles.secondaryBtn} onPress={() => setAssign(null)} testID="assign-cancel"
+                  accessibilityRole="button" accessibilityLabel="Not now">
+                  <AppText style={styles.secondaryBtnText}>Not now</AppText>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
       {/* Removing a medicine asks first and says what else it will withdraw. */}
       {remove && (
         <View style={styles.backdrop} testID="remove-sheet">
@@ -717,6 +817,18 @@ const styles = StyleSheet.create({
   },
   stepStatValue: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
   stepStatLabel: { fontSize: theme.font.xs, color: theme.colors.muted, textAlign: "center" },
+  choiceCard: {
+    alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: 14,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg, padding: 16,
+    borderWidth: 2, borderColor: theme.colors.border, minHeight: 92,
+  },
+  choiceDisabled: { opacity: 0.5 },
+  choiceIcon: {
+    width: 50, height: 50, borderRadius: 25, backgroundColor: theme.colors.brandLight,
+    alignItems: "center", justifyContent: "center",
+  },
+  choiceTitle: { fontSize: theme.font.base, fontWeight: "800", color: theme.colors.onSurface },
+  choiceSub: { fontSize: theme.font.xs, color: theme.colors.onSurfaceSecondary, lineHeight: 19, marginTop: 2 },
   medActions: { gap: 4, alignItems: "center" },
   medAction: { width: 44, height: 40, alignItems: "center", justifyContent: "center" },
   removeIcon: {

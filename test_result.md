@@ -638,3 +638,200 @@
            advice.
         3. New medicines added by an elder now have no image (MED_IMAGES still keys
            off type, so this is unchanged) — worth a look on a real device.
+
+#====================================================================================================
+# Two-track fulfilment, notifications, photo galleries, and demo data
+#====================================================================================================
+
+## user_problem_statement: |
+  (1) Every concierge action should offer two routes after tapping: ask the family,
+  or have the human-in-the-loop AI agent do it. When the agent completes it the app
+  places the order and the child is asked to pay the invoice — and the same must work
+  by voice. (2) Notifications in both directions plus app-generated ones, e.g. when a
+  voice note or photo is sent. (3) Tapping a family member's photo shows their past
+  shared photos and photos of them from the phone library. (4) No button should return
+  a blank screen; seed sample data for presentation while keeping real upload intact.
+
+## backend:
+  - task: "Two-track fulfilment with human-in-the-loop ordering and invoices"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            POST /concierge/tasks/{id}/assign routes a request to "family" or
+            "concierge". The concierge track has Gemini draft priced line items, but
+            deliberately stops there: status is agent_arranging / awaiting_operator and
+            no invoice exists. POST .../place-order is the human half — it records that
+            a person placed the order, raises an invoice and asks the family to pay.
+            POST /concierge/invoices/{id}/pay settles it and closes the request. A
+            zero-total order is rejected so an unpriced draft can never become a
+            payment request. Verified across the whole chain including role checks.
+
+  - task: "Two-way notification bus and inbox"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            One notification shape for everything, addressed per user, with
+            GET /notifications, per-item read and read-all. Emitted on voice notes,
+            photos, task assignment, invoices, payment, SOS, I'm okay, missed doses and
+            a family member joining. SOS and missed-dose alerts were migrated onto it.
+            Voice notes are now bidirectional — a child's note goes to the parent, and
+            either side can play a note they sent or received.
+
+  - task: "Family photo sharing"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            POST /family/photos (both directions), GET /family/photos with an optional
+            member filter, streamed images behind the media token, and delete limited
+            to whoever shared it. Verified including cross-family isolation.
+
+  - task: "Demo data seeding"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Behind DEMO_MODE (default on). New elder accounts are seeded with three
+            medicines carrying a week of dose history, two appointments, a week of
+            steps, four captioned photos, and two requests — one settled with a paid
+            invoice, one awaiting payment with priced line items. Every record is
+            tagged demo=True.
+
+            Two properties matter and are both tested: the seed never fires a false
+            missed-dose alert (medicines are seeded with real intake history, so the
+            existing gate behaves normally), and DELETE /demo/seed removes only tagged
+            records — a medicine the user really added survives. Real upload paths are
+            untouched; sample photos carry an external_url while real ones stream from
+            object storage.
+
+            IMPORTANT FOR TESTING: the API suites assert the empty-account behaviour
+            and must run with DEMO_MODE=0. With seeding on they will legitimately fail.
+
+## frontend:
+  - task: "Assignment choice on every concierge action, by tap and by voice"
+    implemented: true
+    working: true
+    file: "frontend/app/(elder)/health.tsx, frontend/app/assistant.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Tapping any Care & Concierge action now opens "Who would you like to take
+            care of this?" with the family option naming who will be told and the
+            Sunshine option stating the cost is approved first. The same sheet appears
+            in the assistant when a request is spoken, and the agent honours it
+            directly if she says who should do it.
+
+  - task: "Notification inbox with unread badges"
+    implemented: true
+    working: true
+    file: "frontend/app/notifications.tsx, frontend/src/hooks/use-notifications.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            A shared Updates screen with per-kind icons and tone, plus a bell with an
+            unread badge on both home screens. Family dashboard also gained a
+            "Waiting for payment" panel with a one-tap Pay button.
+
+  - task: "Per-person photo gallery"
+    implemented: true
+    working: true
+    file: "frontend/app/family/[id].tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Tapping a family member opens their shared photos in a grid with a viewer,
+            plus a "From this phone" section backed by expo-media-library that shares
+            a device photo in one tap.
+
+            SCOPE NOTE: the request was for "all photos of that person in the phone
+            library". Neither iOS nor Android exposes per-person albums to an app, so
+            face matching is not possible without shipping recognition of our own.
+            The section therefore shows recent device photos and says so in plain
+            words rather than implying it has filtered by face. NEEDS DEVICE TESTING —
+            the media library cannot run in a browser.
+
+  - task: "No dead buttons"
+    implemented: true
+    working: true
+    file: "frontend/app/(elder)/content.tsx, frontend/app/(child)/profile.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Audited every Pressable for a missing onPress. Two were dead: the reel
+            Share button (now opens the share sheet) and the four rows on the family
+            profile (now go to Updates, Requests & payments, the photo gallery, and a
+            help sheet). No Pressable in the app is now without an action.
+
+## metadata:
+  created_by: "main_agent"
+  version: "2.3"
+  test_sequence: 4
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Per-person photo gallery"
+    - "Demo data seeding"
+    - "Two-track fulfilment with human-in-the-loop ordering and invoices"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+    - agent: "main"
+      message: |
+        133 assertions pass in total: 31 fulfilment/notification/photo, 22 demo
+        seeding, 25 medicine-and-steps, 19 voice agent, 36 core. tsc and eslint clean,
+        web export succeeds, both roles driven in Chromium with zero runtime errors.
+
+        Run the API suites with DEMO_MODE=0 — they assert empty-account behaviour and
+        will fail against a seeded account by design.
+
+        On the ordering flow: the model drafts and prices the order but never places
+        it. place-order is a separate call representing a real person acting, so the
+        elder is never told an order exists until one does. Wiring an actual pharmacy
+        or taxi API, and a real payment provider, are the two integrations still
+        outstanding — paying an invoice currently records settlement, it does not move
+        money.

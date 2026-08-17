@@ -54,6 +54,8 @@ function RootNavigator() {
       <Stack.Screen name="(child)" />
       <Stack.Screen name="call" options={{ presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="assistant" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
+      <Stack.Screen name="notifications" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
+      <Stack.Screen name="family/[id]" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
 }

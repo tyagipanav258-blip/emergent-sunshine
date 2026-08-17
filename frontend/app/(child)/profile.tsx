@@ -1,13 +1,17 @@
-import { View, StyleSheet, ScrollView, Pressable } from "react-native";
+import { useState } from "react";
+import { View, StyleSheet, ScrollView, Pressable, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "@/src/auth";
 import { theme } from "@/src/theme";
 
 export default function ChildProfile() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { user, signOut } = useAuth();
+  const [helpOpen, setHelpOpen] = useState(false);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="child-profile">
@@ -29,13 +33,27 @@ export default function ChildProfile() {
 
         <View style={styles.rows}>
           {[
-            { icon: "notifications", label: "Alerts & notifications", sub: "SOS, low medicine, missed doses" },
-            { icon: "shield-checkmark", label: "Privacy & consent", sub: "What you can see about your parent" },
-            { icon: "document-text", label: "Doctor reports", sub: "Shared reports & prescriptions" },
-            { icon: "help-circle", label: "Help & support", sub: "We're here to help" },
+            { icon: "notifications", label: "Alerts & notifications", sub: "SOS, low medicine, missed doses", go: "/notifications" },
+            { icon: "card", label: "Requests & payments", sub: "What Sunshine arranged and what is owed", go: "/(child)/tasks" },
+            { icon: "images", label: "Photos & voice notes", sub: "Everything shared in your family", go: "family" },
+            { icon: "help-circle", label: "Help & support", sub: "We're here to help", go: "help" },
           ].map((r, i, arr) => (
             <View key={r.label}>
-              <Pressable style={styles.row} testID={`crow-${r.label}`}>
+              <Pressable
+                style={styles.row}
+                testID={`crow-${r.label}`}
+                accessibilityRole="button"
+                accessibilityLabel={`${r.label}. ${r.sub}`}
+                onPress={() => {
+                  if (r.go === "family") {
+                    router.push({ pathname: "/family/[id]", params: { id: user?.elder_id || "", name: user?.elder_name || "" } });
+                  } else if (r.go === "help") {
+                    setHelpOpen(true);
+                  } else {
+                    router.push(r.go as any);
+                  }
+                }}
+              >
                 <View style={styles.rowIcon}><Ionicons name={r.icon as any} size={22} color={theme.colors.brand} /></View>
                 <View style={{ flex: 1 }}>
                   <AppText style={styles.rowLabel}>{r.label}</AppText>
@@ -59,6 +77,34 @@ export default function ChildProfile() {
           <AppText style={styles.logoutText}>Log out</AppText>
         </Pressable>
       </ScrollView>
+
+      {helpOpen && (
+        <View style={styles.backdrop} testID="help-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setHelpOpen(false)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <View style={styles.helpIcon}><Ionicons name="help-buoy" size={36} color="#fff" /></View>
+            <AppText style={styles.sheetTitle}>We\u2019re here to help</AppText>
+            <AppText style={styles.sheetSub}>
+              Questions about a request, a payment or your parent\u2019s account? Our team answers within a day.
+            </AppText>
+            <Pressable
+              style={styles.helpBtn}
+              onPress={() => Linking.openURL("mailto:help@sunshine.care?subject=Sunshine%20support").catch(() => {})}
+              testID="help-email"
+              accessibilityRole="button"
+              accessibilityLabel="Email Sunshine support"
+            >
+              <Ionicons name="mail" size={22} color="#fff" />
+              <AppText style={styles.helpBtnText}>  Email help@sunshine.care</AppText>
+            </Pressable>
+            <Pressable style={styles.helpSecondary} onPress={() => setHelpOpen(false)} testID="help-close"
+              accessibilityRole="button" accessibilityLabel="Close">
+              <AppText style={styles.helpSecondaryText}>Close</AppText>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -83,4 +129,14 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: theme.colors.border, marginLeft: 58 },
   logout: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, marginHorizontal: 20, marginTop: 28, paddingVertical: 18, borderRadius: 999, borderWidth: 2, borderColor: theme.colors.error },
   logoutText: { fontSize: 18, fontWeight: "800", color: theme.colors.error },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  sheet: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24, alignItems: "center", gap: 12 },
+  handle: { width: 44, height: 5, borderRadius: 3, backgroundColor: theme.colors.borderStrong },
+  helpIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center", marginTop: 4 },
+  sheetTitle: { fontSize: theme.font.lg, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
+  sheetSub: { fontSize: theme.font.base, color: theme.colors.onSurfaceSecondary, textAlign: "center", lineHeight: 24 },
+  helpBtn: { alignSelf: "stretch", flexDirection: "row", alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.brand, borderRadius: theme.radius.pill, paddingVertical: 18, minHeight: 60 },
+  helpBtnText: { color: "#fff", fontSize: theme.font.base, fontWeight: "800" },
+  helpSecondary: { alignSelf: "stretch", backgroundColor: theme.colors.surfaceTertiary, borderRadius: theme.radius.pill, paddingVertical: 18, alignItems: "center", minHeight: 60 },
+  helpSecondaryText: { color: theme.colors.onSurface, fontSize: theme.font.base, fontWeight: "700" },
 });

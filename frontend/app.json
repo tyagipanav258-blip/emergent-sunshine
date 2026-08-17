@@ -14,8 +14,9 @@
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Ask questions about videos using your voice.",
         "NSCameraUsageDescription": "Scan your prescription to add medicines.",
-        "NSPhotoLibraryUsageDescription": "Choose a prescription photo to add medicines.",
-        "NSMotionUsageDescription": "Count your daily steps so you and your family can see how active you have been."
+        "NSPhotoLibraryUsageDescription": "Choose photos to share with your family, and add medicines from a prescription photo.",
+        "NSMotionUsageDescription": "Count your daily steps so you and your family can see how active you have been.",
+        "NSPhotoLibraryAddUsageDescription": "Save photos your family shares with you."
       }
     },
     "android": {
@@ -29,7 +30,8 @@
         "RECORD_AUDIO",
         "CAMERA",
         "ACTIVITY_RECOGNITION",
-        "android.permission.ACTIVITY_RECOGNITION"
+        "android.permission.ACTIVITY_RECOGNITION",
+        "READ_MEDIA_IMAGES"
       ]
     },
     "web": {

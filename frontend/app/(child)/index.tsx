@@ -8,9 +8,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAudioPlayer } from "expo-audio";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { useNotifications } from "@/src/hooks/use-notifications";
 import { theme, API } from "@/src/theme";
 
-type VoiceNote = { id: string; from_name: string; created_at: string; played_at: string | null };
+type VoiceNote = { id: string; from_name: string; created_at: string; played_at: string | null; mine?: boolean };
+
+type Invoice = { id: string; title: string; total: number; status: string; vendor: string; items: { label: string; qty: number; amount: number }[] };
 
 type WeeklySummary = {
   headline: string;
@@ -41,10 +44,13 @@ export default function ChildDashboard() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const { unread } = useNotifications();
   const [data, setData] = useState<Analytics | null>(null);
   const [prescriptions, setPrescriptions] = useState<any[]>([]);
   const [notes, setNotes] = useState<VoiceNote[]>([]);
   const [summary, setSummary] = useState<WeeklySummary | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [paying, setPaying] = useState<string | null>(null);
   const [stepWeek, setStepWeek] = useState<StepWeek | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const notePlayer = useAudioPlayer();
@@ -65,6 +71,7 @@ export default function ChildDashboard() {
       // Secondary panels shouldn't hold up the dashboard.
       apiFetch<StepWeek>("/health/steps?days=7").then(setStepWeek).catch(() => {});
       apiFetch<WeeklySummary>("/child/weekly-summary").then(setSummary).catch(() => {});
+      apiFetch<Invoice[]>("/concierge/invoices").then(setInvoices).catch(() => {});
     } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
@@ -91,8 +98,31 @@ export default function ChildDashboard() {
             <AppText style={styles.hi}>Hi {user?.name?.split(" ")[0]},</AppText>
             <AppText style={styles.headerTitle}>How is {data?.elder_name?.split(" ")[0]}?</AppText>
           </View>
-          <View style={styles.avatar} accessible accessibilityLabel={`${data?.elder_name || "Your parent"}'s profile`}>
-            <Ionicons name="person" size={26} color={theme.colors.brand} />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Pressable
+              onPress={() => router.push("/notifications")}
+              hitSlop={10}
+              style={styles.bell}
+              testID="child-notifications"
+              accessibilityRole="button"
+              accessibilityLabel={unread > 0 ? `Updates, ${unread} new` : "Updates"}
+            >
+              <Ionicons name="notifications-outline" size={26} color={theme.colors.onSurface} />
+              {unread > 0 && (
+                <View style={styles.badge}>
+                  <AppText style={styles.badgeText}>{unread > 9 ? "9+" : unread}</AppText>
+                </View>
+              )}
+            </Pressable>
+            <Pressable
+              style={styles.avatar}
+              onPress={() => router.push({ pathname: "/family/[id]", params: { id: user?.elder_id || "", name: data?.elder_name || "" } })}
+              testID="open-parent-gallery"
+              accessibilityRole="button"
+              accessibilityLabel={`Photos from ${data?.elder_name || "your parent"}`}
+            >
+              <Ionicons name="person" size={26} color={theme.colors.brand} />
+            </Pressable>
           </View>
         </View>
 
@@ -149,6 +179,43 @@ export default function ChildDashboard() {
               <View key={i} style={styles.alertRow}>
                 <View style={[styles.alertDot, a.kind === "sos" && styles.alertDotUrgent]} />
                 <AppText style={[styles.alertText, a.kind === "sos" && styles.alertTextUrgent]}>{a.message}</AppText>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Payments the family needs to approve */}
+        {invoices.filter((i) => i.status === "unpaid").length > 0 && (
+          <View style={styles.invoiceBox} testID="invoices">
+            <View style={styles.alertsHead}>
+              <Ionicons name="card" size={20} color={theme.colors.marigoldDark} />
+              <AppText style={styles.invoiceTitle}>Waiting for payment</AppText>
+            </View>
+            {invoices.filter((i) => i.status === "unpaid").map((inv) => (
+              <View key={inv.id} style={styles.invoiceRow} testID={`invoice-${inv.id}`}>
+                <View style={{ flex: 1 }}>
+                  <AppText style={styles.medName}>{inv.title}</AppText>
+                  <AppText style={styles.medMeta}>
+                    {inv.vendor} • {inv.items.map((it) => it.label).join(", ")}
+                  </AppText>
+                </View>
+                <Pressable
+                  style={[styles.payBtn, paying === inv.id && { opacity: 0.6 }]}
+                  disabled={paying === inv.id}
+                  onPress={async () => {
+                    setPaying(inv.id);
+                    try {
+                      await apiFetch(`/concierge/invoices/${inv.id}/pay`, { method: "POST" });
+                      await load();
+                    } catch {}
+                    setPaying(null);
+                  }}
+                  testID={`pay-${inv.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Pay ${inv.total} rupees for ${inv.title}`}
+                >
+                  <AppText style={styles.payBtnText}>{paying === inv.id ? "..." : `Pay ₹${inv.total.toFixed(0)}`}</AppText>
+                </Pressable>
               </View>
             ))}
           </View>
@@ -324,6 +391,27 @@ const styles = StyleSheet.create({
   alertRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   alertDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.error },
   alertText: { fontSize: 15, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+  bell: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
+  badge: {
+    position: "absolute", top: 4, right: 2, minWidth: 20, height: 20, borderRadius: 10,
+    paddingHorizontal: 5, backgroundColor: theme.colors.error,
+    alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: theme.colors.surface,
+  },
+  badgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
+  invoiceBox: {
+    marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigoldLight,
+    borderRadius: theme.radius.lg, padding: 16, gap: 10,
+  },
+  invoiceTitle: { fontSize: theme.font.base, fontWeight: "800", color: theme.colors.onSurface },
+  invoiceRow: {
+    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: theme.colors.surfaceSecondary,
+    borderRadius: theme.radius.md, padding: 12, minHeight: 68,
+  },
+  payBtn: {
+    backgroundColor: theme.colors.brand, borderRadius: theme.radius.pill,
+    paddingHorizontal: 18, paddingVertical: 12, minHeight: 48, justifyContent: "center",
+  },
+  payBtnText: { color: "#fff", fontSize: theme.font.sm, fontWeight: "800" },
   summaryCard: {
     marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigoldLight,
     borderRadius: theme.radius.lg, padding: 18, gap: 10,
