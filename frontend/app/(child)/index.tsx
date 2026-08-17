@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
+import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl, Platform } from "react-native";
+import * as Haptics from "expo-haptics";
 import { AppText } from "@/src/components/AppText";
 import { GradientFill } from "@/src/components/GradientFill";
 import { GradientButton } from "@/src/components/GradientButton";
@@ -8,10 +9,13 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAudioPlayer } from "expo-audio";
+import { useVideoPlayer, VideoView } from "expo-video";
 import * as ImagePicker from "expo-image-picker";
 import { apiFetch, getToken } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useNotifications } from "@/src/hooks/use-notifications";
+import { CommentSheet } from "@/src/components/CommentSheet";
+import { ReactionSheet } from "@/src/components/ReactionSheet";
 import { theme, API } from "@/src/theme";
 
 type VoiceNote = { id: string; from_name: string; created_at: string; played_at: string | null; mine?: boolean };
@@ -27,6 +31,12 @@ type WeeklySummary = {
 };
 
 type StepWeek = { today: number; goal: number; total: number; average: number; days_active: number; goal_days: number };
+
+type Reel = {
+  id: string; creator: string; title: string; description: string; video_url: string; thumbnail_url: string;
+  likes: number; liked: boolean; reactions: Record<string, number>; my_reaction: string | null; comment_count: number;
+  shared_by_name?: string;
+};
 
 type Analytics = {
   elder_name: string; elder_photo?: string | null; location: string; last_active: string | null;
@@ -59,6 +69,10 @@ export default function ChildDashboard() {
   const notePlayer = useAudioPlayer();
   const [token, setTkn] = useState("");
   const [viewer, setViewer] = useState<string | null>(null);
+  const [sharedVideos, setSharedVideos] = useState<Reel[]>([]);
+  const [videoViewer, setVideoViewer] = useState<Reel | null>(null);
+  const [reactFor, setReactFor] = useState<Reel | null>(null);
+  const [commentFor, setCommentFor] = useState<Reel | null>(null);
   const [sendingPhoto, setSendingPhoto] = useState(false);
   const [concierge, setConcierge] = useState<{ open: boolean; busy?: boolean; taskId?: string; title?: string; done?: string }>({ open: false });
   const [loading, setLoading] = useState(true);
@@ -77,6 +91,7 @@ export default function ChildDashboard() {
       apiFetch<StepWeek>("/health/steps?days=7").then(setStepWeek).catch(() => {});
       apiFetch<WeeklySummary>("/child/weekly-summary").then(setSummary).catch(() => {});
       apiFetch<Invoice[]>("/concierge/invoices").then(setInvoices).catch(() => {});
+      apiFetch<Reel[]>("/family/shared-videos").then(setSharedVideos).catch(() => {});
     } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
@@ -115,6 +130,22 @@ export default function ChildDashboard() {
       // Nothing is lost — the photo simply is not shared.
     }
     setSendingPhoto(false);
+  };
+
+  const patchVideo = (id: string, patch: Partial<Reel>) => {
+    setSharedVideos((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+    setVideoViewer((prev) => (prev && prev.id === id ? { ...prev, ...patch } : prev));
+  };
+
+  const toggleVideoLike = async (reel: Reel) => {
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    patchVideo(reel.id, { liked: !reel.liked, likes: reel.likes + (reel.liked ? -1 : 1) });
+    try {
+      const saved = await apiFetch<Reel>(`/content/${reel.id}/like`, { method: "POST" });
+      patchVideo(reel.id, saved);
+    } catch {
+      patchVideo(reel.id, reel);
+    }
   };
 
   /** Raise a request on the parent's behalf, then choose who sees it through. */
@@ -174,7 +205,11 @@ export default function ChildDashboard() {
               accessibilityRole="button"
               accessibilityLabel={`Photos from ${data?.elder_name || "your parent"}`}
             >
-              <Ionicons name="person" size={26} color={theme.colors.brand} />
+              {data?.elder_photo ? (
+                <Image source={{ uri: data.elder_photo }} style={styles.avatarImg} contentFit="cover" />
+              ) : (
+                <Ionicons name="person" size={26} color={theme.colors.brand} />
+              )}
             </Pressable>
           </View>
         </View>
@@ -268,6 +303,28 @@ export default function ChildDashboard() {
                 );
               })}
             </View>
+          </>
+        )}
+
+        {/* Videos the parent chose to share, watched from here too */}
+        {sharedVideos.length > 0 && (
+          <>
+            <AppText style={styles.section}>Videos {parentName} shared</AppText>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }}>
+              {sharedVideos.map((v) => (
+                <Pressable key={v.id} style={styles.videoCard} onPress={() => setVideoViewer(v)} testID={`shared-video-${v.id}`}
+                  accessibilityRole="button" accessibilityLabel={`Watch ${v.title}, shared by ${v.shared_by_name}`}>
+                  <Image source={{ uri: v.thumbnail_url }} style={styles.videoThumb} contentFit="cover" />
+                  <View style={styles.videoPlayBadge}><Ionicons name="play" size={16} color="#fff" /></View>
+                  <View style={styles.videoMeta}>
+                    <AppText style={styles.videoTitle} numberOfLines={1}>{v.title}</AppText>
+                    <AppText style={styles.videoSub} numberOfLines={1}>
+                      <Ionicons name="heart" size={11} color={theme.colors.marigoldDark} /> {v.likes} · {v.comment_count} comment{v.comment_count === 1 ? "" : "s"}
+                    </AppText>
+                  </View>
+                </Pressable>
+              ))}
+            </ScrollView>
           </>
         )}
 
@@ -445,6 +502,34 @@ export default function ChildDashboard() {
         </View>
       )}
 
+      {videoViewer && (
+        <VideoViewerModal
+          reel={videoViewer}
+          insets={insets}
+          onClose={() => setVideoViewer(null)}
+          onLike={() => toggleVideoLike(videoViewer)}
+          onReact={() => setReactFor(videoViewer)}
+          onComment={() => setCommentFor(videoViewer)}
+        />
+      )}
+      {reactFor && (
+        <ReactionSheet
+          item={reactFor}
+          title={reactFor.title}
+          endpoint={(id) => `/content/${id}/react`}
+          onChange={(next) => patchVideo(reactFor.id, next as Partial<Reel>)}
+          onClose={() => setReactFor(null)}
+        />
+      )}
+      {commentFor && (
+        <CommentSheet
+          contentId={commentFor.id}
+          title={commentFor.title}
+          onCountChange={(count) => patchVideo(commentFor.id, { comment_count: count })}
+          onClose={() => setCommentFor(null)}
+        />
+      )}
+
       {concierge.open && (
         <View style={styles.backdrop} testID="child-concierge-sheet">
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setConcierge({ open: false })}
@@ -543,6 +628,52 @@ function Stat({ icon, label, value, color }: any) {
   );
 }
 
+/** A single shared video, watched full-screen — the same like/react/comment
+ * controls the parent's own Watch feed has, so a reply reaches her either way. */
+function VideoViewerModal({
+  reel, insets, onClose, onLike, onReact, onComment,
+}: { reel: Reel; insets: { top: number; bottom: number }; onClose: () => void; onLike: () => void; onReact: () => void; onComment: () => void }) {
+  const player = useVideoPlayer(reel.video_url, (p) => { p.loop = true; p.play(); });
+  const myTopReaction = Object.entries(reel.reactions || {}).sort((a, b) => b[1] - a[1])[0];
+
+  return (
+    <View style={styles.videoModal} testID={`video-viewer-${reel.id}`}>
+      <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="contain" nativeControls={false} />
+      <Pressable
+        style={[styles.viewerClose, { top: insets.top + 12 }]}
+        onPress={onClose}
+        testID="video-viewer-close"
+        hitSlop={12}
+        accessibilityRole="button"
+        accessibilityLabel="Close video"
+      >
+        <Ionicons name="close" size={32} color="#fff" />
+      </Pressable>
+      <View style={[styles.videoModalInfo, { paddingBottom: insets.bottom + 20 }]}>
+        <AppText style={styles.videoModalTitle}>{reel.title}</AppText>
+        {reel.shared_by_name ? <AppText style={styles.videoModalSub}>Shared by {reel.shared_by_name}</AppText> : null}
+        <View style={styles.videoModalActions}>
+          <Pressable style={styles.videoModalBtn} onPress={onLike} testID={`video-like-${reel.id}`}
+            accessibilityRole="button" accessibilityLabel={reel.liked ? "Remove like" : "Like this video"}>
+            <Ionicons name={reel.liked ? "heart" : "heart-outline"} size={24} color={reel.liked ? theme.colors.marigold : "#fff"} />
+            <AppText style={styles.videoModalBtnText}>{reel.likes}</AppText>
+          </Pressable>
+          <Pressable style={styles.videoModalBtn} onPress={onReact} testID={`video-react-${reel.id}`}
+            accessibilityRole="button" accessibilityLabel="Choose a reaction">
+            <Ionicons name={reel.my_reaction ? "happy" : "happy-outline"} size={24} color={reel.my_reaction ? theme.colors.marigold : "#fff"} />
+            <AppText style={styles.videoModalBtnText}>{myTopReaction ? myTopReaction[1] : "React"}</AppText>
+          </Pressable>
+          <Pressable style={styles.videoModalBtn} onPress={onComment} testID={`video-comment-${reel.id}`}
+            accessibilityRole="button" accessibilityLabel={`Comments, ${reel.comment_count}`}>
+            <Ionicons name="chatbubble-ellipses-outline" size={24} color="#fff" />
+            <AppText style={styles.videoModalBtnText}>{reel.comment_count || "Comment"}</AppText>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
 
@@ -614,7 +745,9 @@ const styles = StyleSheet.create({
   avatar: {
     width: 52, height: 52, borderRadius: 26, borderWidth: 2, borderColor: theme.colors.brandLight,
     backgroundColor: theme.colors.surfaceTertiary, alignItems: "center", justifyContent: "center",
+    overflow: "hidden",
   },
+  avatarImg: { width: "100%", height: "100%" },
   banner: { flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, backgroundColor: theme.colors.brandLight, borderRadius: 20, padding: 18 },
   pulse: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#fff", alignItems: "center", justifyContent: "center" },
   bannerTitle: { fontSize: 18, fontWeight: "800", color: theme.colors.onSurface },
@@ -690,4 +823,23 @@ const styles = StyleSheet.create({
   viewer: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.94)", alignItems: "center", justifyContent: "center" },
   viewerImg: { width: "92%", height: "80%" },
   viewerClose: { position: "absolute", right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: "rgba(255,255,255,0.2)", alignItems: "center", justifyContent: "center" },
+
+  videoCard: { width: 160, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border },
+  videoThumb: { width: 160, height: 100, backgroundColor: theme.colors.surfaceTertiary },
+  videoPlayBadge: {
+    position: "absolute", top: 36, left: 68, width: 28, height: 28, borderRadius: 14,
+    backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center",
+  },
+  videoMeta: { padding: 10, gap: 2 },
+  videoTitle: { fontSize: 14, fontWeight: "800", color: theme.colors.onSurface },
+  videoSub: { fontSize: 12, color: theme.colors.muted },
+  videoModal: { ...StyleSheet.absoluteFillObject, backgroundColor: "#000" },
+  videoModalInfo: {
+    position: "absolute", left: 0, right: 0, bottom: 0, paddingHorizontal: 20, paddingTop: 40, gap: 4,
+  },
+  videoModalTitle: { color: "#fff", fontSize: 20, fontWeight: "800" },
+  videoModalSub: { color: "rgba(255,255,255,0.8)", fontSize: 14, fontWeight: "600" },
+  videoModalActions: { flexDirection: "row", gap: 20, marginTop: 14 },
+  videoModalBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(255,255,255,0.16)", borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10 },
+  videoModalBtnText: { color: "#fff", fontSize: 14, fontWeight: "800" },
 });

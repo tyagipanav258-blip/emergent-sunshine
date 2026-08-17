@@ -1,16 +1,17 @@
 export const theme = {
   colors: {
-    // Elder-friendly: Deep Sage Green + Soft Marigold, warm cream surfaces
+    // Elder-friendly: faded Slate Blue + Soft Marigold, warm cream surfaces
     surface: '#FDFBF7',
     onSurface: '#1A2015',
     surfaceSecondary: '#FFFFFF',
     surfaceTertiary: '#F2EFE9',
-    surfaceInverse: '#2C3F2F',
+    surfaceInverse: '#284258',
     onSurfaceInverse: '#FFFFFF',
 
-    brand: '#3A5A40',
-    brandDark: '#2C3F2F',
-    brandLight: '#E7EDE6',
+    // 5.4:1 against white — safe for white text on a solid brand button.
+    brand: '#3F6E93',
+    brandDark: '#2C5170',
+    brandLight: '#E4EEF5',
     onBrand: '#FFFFFF',
 
     marigold: '#FFB703',
@@ -54,7 +55,7 @@ export const theme = {
 /**
  * Diagonal multi-stop gradients, in the manner of the Instagram mark — a warm
  * sweep from a lighter corner into a deeper one — but built from Sunshine's own
- * sage and marigold so the app still reads as elder care rather than social.
+ * faded slate blue and marigold so the app still reads as elder care rather than social.
  *
  * Each sweep spans roughly a 4x luminance range, so the fade is clearly visible
  * rather than a flat colour with a hint of shading. The lightest stop of every
@@ -62,7 +63,7 @@ export const theme = {
  * is what buys the width while keeping a label legible across the whole face.
  */
 export const gradients = {
-  brand: ["#4D8151", "#3A5A40", "#22401F"],
+  brand: ["#457B9D", "#3F6E93", "#2C5170"],
   success: ["#39825E", "#2A6B4C", "#15452F"],
   // A muted rose-brick rather than a hot red. On a screen an older adult looks
   // at all day, a bright alarm colour sitting there permanently reads as being
@@ -74,7 +75,7 @@ export const gradients = {
   /** The logo mark: a full sunrise, warm gold falling into coral. */
   logo: ["#FFDE7A", "#FFB703", "#F97316", "#E0526D"],
   /** Soft tints for icon wells and cards. */
-  brandSoft: ["#F0F4EF", "#E2EAE1"],
+  brandSoft: ["#EFF4F8", "#E1EAF1"],
   sunriseSoft: ["#FFF6E0", "#FFEFC7"],
 } as const;
 

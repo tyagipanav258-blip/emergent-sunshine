@@ -51,7 +51,7 @@ async function ensureChannels() {
     name: "Updates",
     importance: Notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 200, 120, 200],
-    lightColor: "#3A5A40",
+    lightColor: "#3F6E93",
   });
   await Notifications.setNotificationChannelAsync("urgent", {
     name: "Emergencies and missed medicines",

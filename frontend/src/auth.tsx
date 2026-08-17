@@ -14,6 +14,7 @@ export type User = {
   location?: string;
   timezone?: string;
   relation?: string;
+  photo_url?: string | null;
 };
 
 type AuthState = {

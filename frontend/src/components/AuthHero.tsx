@@ -6,27 +6,32 @@ import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { theme } from "@/src/theme";
 
-// A sunrise over sea and sand — the same image behind every entry screen. Built
-// as vector art rather than a photograph, because a photograph this bright
-// behind body text is how contrast dies for the exact eyes this app is for; a
-// crafted gradient holds up at every crop height and never fights the words on
-// top of it. contentPosition="top" keeps the sun anchored regardless of how
-// tall a given hero is cropped to.
+// A sunrise over sea and sand, generated to match the reference the user
+// supplied (no file access to the original — recreated the scene itself,
+// their explicit call over an abstracted gradient). Now the backdrop for the
+// whole entry screen, not just a banner: one <AuthBackground> behind
+// everything, with AuthHero as transparent chrome sitting on top of it.
 const BEACH_BG = require("../../assets/images/auth-beach.png");
 
+/** The full-bleed backdrop for an entry screen. Render once, as the first
+ * child of the screen's root, so the same photograph shows through the
+ * header, the gaps around the form sheet, and the safe-area edges alike. */
+export function AuthBackground() {
+  return <Image source={BEACH_BG} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="top" />;
+}
+
 /**
- * The banner that opens every entry screen — sign-in choice, elder login,
- * family login. One visual language for "you have arrived", before the screen
- * gets down to whichever specific thing it is asking for.
- *
- * Kept deliberately short on real screens: the image carries the welcome, the
- * cream sheet below carries the actual reading and typing, so contrast never
- * suffers where it matters for an older eye.
+ * The transparent header that opens every entry screen — sign-in choice,
+ * elder login, family login — sitting directly on the shared AuthBackground
+ * rather than carrying its own image. The reading and typing below live in an
+ * opaque cream sheet, so contrast never suffers where it matters for an older
+ * eye, while the photograph itself is free to run the full height of the page.
  */
 export function AuthHero({
   title,
   subtitle,
   icon = "sunny",
+  photo,
   onBack,
   insetTop,
   compact = false,
@@ -35,6 +40,8 @@ export function AuthHero({
   title: string;
   subtitle?: string;
   icon?: React.ComponentProps<typeof Ionicons>["name"];
+  /** A face for the persona this screen is speaking to — shown instead of the icon. */
+  photo?: string;
   onBack?: () => void;
   insetTop: number;
   /** Shorter banner for screens that need the room below for a form or keypad. */
@@ -43,7 +50,6 @@ export function AuthHero({
 }) {
   return (
     <View style={[styles.wrap, compact ? styles.wrapCompact : styles.wrapTall]} testID={testID}>
-      <Image source={BEACH_BG} style={StyleSheet.absoluteFill} contentFit="cover" contentPosition="top" />
       {onBack && (
         <Pressable
           onPress={() => {
@@ -62,7 +68,11 @@ export function AuthHero({
       <View style={[styles.content, { paddingTop: insetTop + (compact ? 36 : 16) }]}>
         <View style={styles.glow}>
           <View style={styles.iconWell}>
-            <Ionicons name={icon} size={compact ? 34 : 44} color={theme.colors.marigoldDark} />
+            {photo ? (
+              <Image source={{ uri: photo }} style={styles.iconPhoto} contentFit="cover" />
+            ) : (
+              <Ionicons name={icon} size={compact ? 34 : 44} color={theme.colors.marigoldDark} />
+            )}
           </View>
         </View>
         <AppText style={[styles.title, compact && styles.titleCompact]}>{title}</AppText>
@@ -73,14 +83,9 @@ export function AuthHero({
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    width: "100%",
-    borderBottomLeftRadius: 40,
-    borderBottomRightRadius: 40,
-    overflow: "hidden",
-  },
-  wrapTall: { paddingBottom: 36 },
-  wrapCompact: { paddingBottom: 22 },
+  wrap: { width: "100%" },
+  wrapTall: { paddingBottom: 28 },
+  wrapCompact: { paddingBottom: 18 },
   back: {
     position: "absolute", left: 16, width: 44, height: 44, borderRadius: 22,
     backgroundColor: "rgba(255,255,255,0.55)", alignItems: "center", justifyContent: "center",
@@ -95,9 +100,10 @@ const styles = StyleSheet.create({
   },
   iconWell: {
     width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center",
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.surface, overflow: "hidden",
     shadowColor: "#7C4A03", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
+  iconPhoto: { width: "100%", height: "100%" },
   title: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   titleCompact: { fontSize: 22 },
   // Deep ocean blue rather than the app's usual muted grey — the tone the sky

@@ -8,7 +8,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/src/auth";
-import { AuthHero } from "@/src/components/AuthHero";
+import { AuthHero, AuthBackground } from "@/src/components/AuthHero";
+import { FAMILY_PHOTO } from "@/src/constants/personas";
 import { theme } from "@/src/theme";
 
 export default function ChildLogin() {
@@ -55,8 +56,10 @@ export default function ChildLogin() {
 
   return (
     <View style={styles.root} testID="child-login">
+      <AuthBackground />
       <AuthHero
         icon="people"
+        photo={FAMILY_PHOTO}
         title={mode === "login" ? "Welcome back" : "Create your account"}
         subtitle={mode === "login" ? "Log in to care for your parent" : "Your parent's family code connects you"}
         onBack={() => router.back()}
@@ -64,53 +67,55 @@ export default function ChildLogin() {
         compact
       />
 
-      <KeyboardAwareScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" bottomOffset={20}>
-        {mode === "signup" && (
-          <Field icon="person" value={name} onChangeText={setName} placeholder="Your name" testID="child-name" />
-        )}
-        <Field icon="mail" value={email} onChangeText={setEmail} placeholder="Email" keyboardType="email-address" autoCapitalize="none" testID="child-email" />
-        <Field
-          icon="lock-closed"
-          value={password}
-          onChangeText={setPassword}
-          placeholder={mode === "signup" ? "Password — at least 6 characters" : "Password"}
-          secureTextEntry={!showPassword}
-          testID="child-password"
-          rightIcon={showPassword ? "eye-off" : "eye"}
-          onRightIconPress={() => setShowPassword((v) => !v)}
-          rightIconLabel={showPassword ? "Hide password" : "Show password"}
-        />
-        {mode === "signup" && (
+      <View style={[styles.sheet, { marginBottom: insets.bottom + 16 }]}>
+        <KeyboardAwareScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" bottomOffset={20}>
+          {mode === "signup" && (
+            <Field icon="person" value={name} onChangeText={setName} placeholder="Your name" testID="child-name" />
+          )}
+          <Field icon="mail" value={email} onChangeText={setEmail} placeholder="Email" keyboardType="email-address" autoCapitalize="none" testID="child-email" />
           <Field
-            icon="key"
-            value={familyCode}
-            onChangeText={(t: string) => setFamilyCode(t.toUpperCase())}
-            placeholder="Family code, from your parent's profile"
-            autoCapitalize="characters"
-            testID="child-family-code"
+            icon="lock-closed"
+            value={password}
+            onChangeText={setPassword}
+            placeholder={mode === "signup" ? "Password — at least 6 characters" : "Password"}
+            secureTextEntry={!showPassword}
+            testID="child-password"
+            rightIcon={showPassword ? "eye-off" : "eye"}
+            onRightIconPress={() => setShowPassword((v) => !v)}
+            rightIconLabel={showPassword ? "Hide password" : "Show password"}
           />
-        )}
+          {mode === "signup" && (
+            <Field
+              icon="key"
+              value={familyCode}
+              onChangeText={(t: string) => setFamilyCode(t.toUpperCase())}
+              placeholder="Family code, from your parent's profile"
+              autoCapitalize="characters"
+              testID="child-family-code"
+            />
+          )}
 
-        {error ? <AppText style={styles.error} testID="child-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : null}
+          {error ? <AppText style={styles.error} testID="child-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : null}
 
-        <GradientButton tone="brand"
-          style={[styles.primaryBtn, (!canSubmit || busy) && styles.btnDisabled]}
-          disabled={!canSubmit || busy}
-          onPress={submit}
-          testID="child-submit"
-          accessibilityRole="button"
-          accessibilityLabel={mode === "login" ? "Log in" : "Create account"}
-        >
-          <AppText style={styles.primaryBtnText}>{busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}</AppText>
-        </GradientButton>
+          <GradientButton tone="brand"
+            style={[styles.primaryBtn, (!canSubmit || busy) && styles.btnDisabled]}
+            disabled={!canSubmit || busy}
+            onPress={submit}
+            testID="child-submit"
+            accessibilityRole="button"
+            accessibilityLabel={mode === "login" ? "Log in" : "Create account"}
+          >
+            <AppText style={styles.primaryBtnText}>{busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}</AppText>
+          </GradientButton>
 
-        <Pressable onPress={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }} style={styles.switchLink} testID="child-switch-mode">
-          <AppText style={styles.switchText}>
-            {mode === "login" ? "Don't have an account? " : "Have an account? "}
-            <AppText style={styles.switchBold}>{mode === "login" ? "Sign up" : "Log in"}</AppText>
-          </AppText>
-        </Pressable>
-      </KeyboardAwareScrollView>
+          <Pressable onPress={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }} style={styles.switchLink} testID="child-switch-mode">
+            <AppText style={styles.switchText}>
+              {mode === "login" ? "Don't have an account? " : "Have an account? "}
+              <AppText style={styles.switchBold}>{mode === "login" ? "Sign up" : "Log in"}</AppText>
+            </AppText>
+          </Pressable>
+        </KeyboardAwareScrollView>
+      </View>
     </View>
   );
 }
@@ -140,6 +145,10 @@ function Field({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
+  sheet: {
+    flex: 1, marginHorizontal: 16, borderRadius: 32,
+    backgroundColor: theme.colors.surface, overflow: "hidden",
+  },
   form: { paddingHorizontal: 24, paddingTop: 24, paddingBottom: 40, gap: 14 },
   field: {
     flexDirection: "row", alignItems: "center", gap: 12,

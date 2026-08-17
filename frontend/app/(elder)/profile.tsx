@@ -99,7 +99,11 @@ export default function ElderProfile() {
           scrollEventThrottle={32} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.avatar} accessible accessibilityLabel={`Profile picture for ${user?.name || "you"}`}>
-            <Ionicons name="person" size={48} color={theme.colors.brand} />
+            {user?.photo_url ? (
+              <Image source={{ uri: user.photo_url }} style={styles.avatarImg} contentFit="cover" />
+            ) : (
+              <Ionicons name="person" size={48} color={theme.colors.brand} />
+            )}
           </View>
           <AppText style={styles.name}>{user?.name}</AppText>
           {user?.location ? <AppText style={styles.sub}>{user.location}</AppText> : null}
@@ -299,7 +303,9 @@ const styles = StyleSheet.create({
   avatar: {
     width: 100, height: 100, borderRadius: 50, borderWidth: 4, borderColor: theme.colors.brandLight,
     backgroundColor: theme.colors.surfaceTertiary, alignItems: "center", justifyContent: "center",
+    overflow: "hidden",
   },
+  avatarImg: { width: "100%", height: "100%" },
   name: { fontSize: theme.font.xl, fontWeight: "800", color: theme.colors.onSurface, marginTop: 12 },
   sub: { fontSize: theme.font.base, color: theme.colors.muted },
   codeCard: { marginHorizontal: 20, marginTop: 20, backgroundColor: theme.colors.brandLight, borderRadius: 24, padding: 20, gap: 12 },

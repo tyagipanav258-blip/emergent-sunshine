@@ -12,7 +12,13 @@ import * as ImagePicker from "expo-image-picker";
 import { apiFetch, logActivity } from "@/src/api";
 import { useSteps } from "@/src/hooks/use-steps";
 import { useScrollChrome } from "@/src/scroll-context";
+import { medArt } from "@/src/constants/med-art";
 import { theme } from "@/src/theme";
+
+const ICON_REORDER = require("../../assets/images/health/icon-reorder.png");
+const ICON_DOCTOR = require("../../assets/images/health/icon-doctor.png");
+const ICON_TRANSPORT = require("../../assets/images/health/icon-transport.png");
+const ICON_WALK = require("../../assets/images/health/icon-walk.png");
 
 type Med = { id: string; name: string; dose: string; time: string; type: string; stock: number; per_day: number; taken_today: boolean; image: string; days_left: number; low: boolean };
 type Appt = { id: string; doctor: string; specialty: string; date: string; time: string; place: string };
@@ -220,7 +226,7 @@ export default function ElderHealth() {
               : `${steps.today} steps today. Open your weekly walking summary.`
           }
         >
-          <View style={styles.stepsIcon}><GradientFill tone="brandSoft" radius={28} /><Ionicons name="walk" size={30} color={theme.colors.brand} /></View>
+          <View style={styles.stepsIcon}><GradientFill tone="brandSoft" radius={28} /><Image source={ICON_WALK} style={styles.stepsIconArt} contentFit="contain" /></View>
           <View style={{ flex: 1 }}>
             {/* A count already synced from a phone is worth showing even where
                 this device has no sensor of its own. */}
@@ -273,7 +279,9 @@ export default function ElderHealth() {
             {/* Image beside the question rather than stacked above it — the
                 stacked version left a band of empty card doing nothing. */}
             <View style={styles.intakeTop}>
-              <Image source={{ uri: nextDue.image }} style={styles.intakeImg} />
+              <View style={[styles.intakeImg, { backgroundColor: medArt(nextDue.name, nextDue.type).tint }]}>
+                <Image source={medArt(nextDue.name, nextDue.type).image} style={styles.intakeImgArt} contentFit="contain" />
+              </View>
               <View style={{ flex: 1 }}>
                 <AppText style={styles.intakeQ}>Did you take your {nextDue.name}?</AppText>
                 <AppText style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</AppText>
@@ -354,7 +362,9 @@ export default function ElderHealth() {
               accessibilityLabel={`${m.name}, ${m.dose}, due ${m.time}`}
               accessibilityHint={m.taken_today ? "Already confirmed today. Activate to undo." : "Activate to confirm you took it"}
             >
-              <Image source={{ uri: m.image }} style={styles.medImg} />
+              <View style={[styles.medImg, { backgroundColor: medArt(m.name, m.type).tint }]}>
+                <Image source={medArt(m.name, m.type).image} style={styles.medImgArt} contentFit="contain" />
+              </View>
               <View style={{ flex: 1 }}>
                 <AppText style={[styles.medName, m.taken_today && styles.struck]}>{m.name}</AppText>
                 <AppText style={styles.medMeta}>{m.dose} • {m.time}</AppText>
@@ -417,9 +427,9 @@ export default function ElderHealth() {
         {/* Care actions */}
         <AppText style={styles.section}>Care & Concierge</AppText>
         <View style={styles.grid}>
-          <GridBtn icon="repeat" label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
-          <GridBtn icon="medkit" label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
-          <GridBtn icon="car" label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
+          <GridBtn image={ICON_REORDER} label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
+          <GridBtn image={ICON_DOCTOR} label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
+          <GridBtn image={ICON_TRANSPORT} label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
         </View>
         <Pressable
           style={styles.askConcierge}
@@ -812,7 +822,7 @@ function StepStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function GridBtn({ icon, label, onPress }: any) {
+function GridBtn({ image, label, onPress }: any) {
   return (
     <Pressable
       style={styles.gridBtn}
@@ -821,7 +831,7 @@ function GridBtn({ icon, label, onPress }: any) {
       accessibilityRole="button"
       accessibilityLabel={label}
     >
-      <View style={styles.gridIcon}><Ionicons name={icon} size={28} color={theme.colors.brand} /></View>
+      <View style={styles.gridIcon}><Image source={image} style={styles.gridIconArt} contentFit="contain" /></View>
       <AppText style={styles.gridLabel}>{label}</AppText>
     </Pressable>
   );
@@ -841,7 +851,8 @@ const styles = StyleSheet.create({
   missedSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 19 },
   savedRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: theme.colors.brandLight, borderRadius: 12, padding: 10 },
   savedText: { fontSize: 14, fontWeight: "700", color: theme.colors.success, flex: 1 },
-  intakeImg: { width: 48, height: 48, borderRadius: 12 },
+  intakeImg: { width: 48, height: 48, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+  intakeImgArt: { width: 38, height: 38 },
   intakeQ: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface, lineHeight: 25 },
   intakeMeta: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
   intakeBtns: { flexDirection: "row", gap: 10, alignSelf: "stretch" },
@@ -866,6 +877,7 @@ const styles = StyleSheet.create({
     width: 56, height: 56, borderRadius: 28, backgroundColor: theme.colors.brandLight,
     alignItems: "center", justifyContent: "center",
   },
+  stepsIconArt: { width: 40, height: 40 },
   stepsLabel: { fontSize: theme.font.sm, color: theme.colors.muted, fontWeight: "700" },
   stepsValue: { fontSize: theme.font.xxl, fontWeight: "800", color: theme.colors.onSurface, lineHeight: 38 },
   stepsUnavailable: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, lineHeight: 21, marginTop: 2 },
@@ -932,7 +944,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceTertiary, borderRadius: theme.radius.sm, padding: 12,
   },
   medCard: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 14, borderWidth: 1, borderColor: theme.colors.border },
-  medImg: { width: 56, height: 56, borderRadius: 14 },
+  medImg: { width: 56, height: 56, borderRadius: 14, alignItems: "center", justifyContent: "center" },
+  medImgArt: { width: 44, height: 44 },
   medName: { fontSize: 19, fontWeight: "800", color: theme.colors.onSurface },
   struck: { textDecorationLine: "line-through", color: theme.colors.muted },
   medMeta: { fontSize: 15, color: theme.colors.muted, marginTop: 2 },
@@ -949,6 +962,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingHorizontal: 20 },
   gridBtn: { width: "47%", backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 18, gap: 10, borderWidth: 1, borderColor: theme.colors.border },
   gridIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  gridIconArt: { width: 34, height: 34 },
   gridLabel: { fontSize: 17, fontWeight: "700", color: theme.colors.onSurface },
   askConcierge: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigoldLight, borderRadius: 20, paddingVertical: 18 },
   askConciergeText: { fontSize: 17, fontWeight: "800", color: theme.colors.onSurface },

@@ -4,6 +4,7 @@ import { AppText } from "@/src/components/AppText";
 import { AlertSettings } from "@/src/components/AlertSettings";
 import { GradientFill } from "@/src/components/GradientFill";
 import { GradientButton } from "@/src/components/GradientButton";
+import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,7 +21,13 @@ export default function ChildProfile() {
     <View style={[styles.root, { paddingTop: insets.top }]} testID="child-profile">
       <ScrollView contentContainerStyle={{ paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <View style={styles.avatar}><Ionicons name="person" size={44} color={theme.colors.brand} /></View>
+          <View style={styles.avatar}>
+            {user?.photo_url ? (
+              <Image source={{ uri: user.photo_url }} style={styles.avatarImg} contentFit="cover" />
+            ) : (
+              <Ionicons name="person" size={44} color={theme.colors.brand} />
+            )}
+          </View>
           <AppText style={styles.name}>{user?.name}</AppText>
           <AppText style={styles.sub}>{user?.email}</AppText>
         </View>
@@ -118,7 +125,8 @@ export default function ChildProfile() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
   header: { alignItems: "center", paddingTop: 16 },
-  avatar: { width: 100, height: 100, borderRadius: 50, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  avatar: { width: 100, height: 100, borderRadius: 50, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  avatarImg: { width: "100%", height: "100%" },
   name: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, marginTop: 12 },
   sub: { fontSize: 16, color: theme.colors.muted },
   linkCard: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20, marginTop: 20, backgroundColor: theme.colors.brandLight, borderRadius: 20, padding: 18 },

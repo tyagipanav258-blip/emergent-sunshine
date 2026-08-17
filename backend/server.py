@@ -157,7 +157,7 @@ def public_user(u: dict) -> dict:
         "phone": u.get("phone"), "email": u.get("email"),
         "family_code": u.get("family_code"), "elder_id": u.get("elder_id"),
         "location": u.get("location"), "timezone": u.get("timezone") or DEFAULT_TZ,
-        "relation": u.get("relation"),
+        "relation": u.get("relation"), "photo_url": u.get("photo_url"),
     }
 
 
@@ -815,15 +815,182 @@ async def family(u: dict = Depends(current_user)):
 # ============================ CONTENT (reels) ============================
 CONTENT_CATEGORIES = ["All", "Spiritual", "Bhajans", "Songs", "Devotional", "Exercise", "Yoga", "Recipes", "Travel"]
 
+
+def _content_by_id(cid: str) -> Optional[dict]:
+    return next((c for c in CONTENT if c["id"] == cid), None)
+
+
+async def _content_view(item: dict, eid: str, u: dict) -> dict:
+    """A catalogue entry plus this family's own likes, reactions and talk about
+    it — the catalogue itself is shared demo data, but the response to it is not."""
+    cid = item["id"]
+    real_likes = await db.content_likes.count_documents({"content_id": cid, "elder_id": eid})
+    liked = await db.content_likes.find_one({"content_id": cid, "elder_id": eid, "user_id": u["id"]}) is not None
+    reactions = await db.content_reactions.find({"content_id": cid, "elder_id": eid}, {"_id": 0}).to_list(50)
+    counts: dict = {}
+    for r in reactions:
+        counts[r["emoji"]] = counts.get(r["emoji"], 0) + 1
+    mine = next((r["emoji"] for r in reactions if r["user_id"] == u["id"]), None)
+    comment_count = await db.content_comments.count_documents({"content_id": cid, "elder_id": eid})
+    return {
+        **item, "likes": item["likes"] + real_likes, "liked": liked,
+        "reactions": counts, "my_reaction": mine, "comment_count": comment_count,
+    }
+
+
 @api.get("/content")
-async def get_content(category: Optional[str] = None):
-    if category and category.lower() != "all":
-        return [c for c in CONTENT if c["category"].lower() == category.lower()]
-    return CONTENT
+async def get_content(category: Optional[str] = None, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    items = CONTENT if not category or category.lower() == "all" else [c for c in CONTENT if c["category"].lower() == category.lower()]
+    return [await _content_view(c, eid, u) for c in items]
+
 
 @api.get("/content/categories")
 async def content_categories():
     return CONTENT_CATEGORIES
+
+
+@api.post("/content/{cid}/like")
+async def toggle_content_like(cid: str, u: dict = Depends(current_user)):
+    """Tapping again takes it back — the same undo a photo's heart gets."""
+    item = _content_by_id(cid)
+    if not item:
+        raise HTTPException(404, "Video not found")
+    eid = await elder_id_for(u)
+    existing = await db.content_likes.find_one({"content_id": cid, "elder_id": eid, "user_id": u["id"]})
+    if existing:
+        await db.content_likes.delete_one({"_id": existing["_id"]})
+    else:
+        await db.content_likes.insert_one({
+            "content_id": cid, "elder_id": eid, "user_id": u["id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    return await _content_view(item, eid, u)
+
+
+class ContentReactIn(BaseModel):
+    emoji: str
+
+
+@api.post("/content/{cid}/react")
+async def react_to_content(cid: str, b: ContentReactIn, u: dict = Depends(current_user)):
+    """One reaction per person, swap-or-remove on a repeat tap — the same rule
+    photo reactions use, and the same five faces (see REACTIONS below)."""
+    if b.emoji not in REACTIONS:
+        raise HTTPException(422, "Not a reaction we know")
+    item = _content_by_id(cid)
+    if not item:
+        raise HTTPException(404, "Video not found")
+    eid = await elder_id_for(u)
+    existing = await db.content_reactions.find_one({"content_id": cid, "elder_id": eid, "user_id": u["id"]})
+    if existing and existing["emoji"] == b.emoji:
+        await db.content_reactions.delete_one({"_id": existing["_id"]})
+        return await _content_view(item, eid, u)
+    if existing:
+        await db.content_reactions.delete_one({"_id": existing["_id"]})
+    await db.content_reactions.insert_one({
+        "content_id": cid, "elder_id": eid, "user_id": u["id"], "name": u.get("name") or "",
+        "emoji": b.emoji, "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    # Tell the other side at most once per person, ever — mirrors the photo
+    # reaction throttle so switching from a heart to a smile isn't news twice.
+    meta = await db.content_meta.find_one({"elder_id": eid, "content_id": cid}) or {}
+    told = meta.get("reaction_notified") or []
+    if u["id"] not in told:
+        await db.content_meta.update_one(
+            {"elder_id": eid, "content_id": cid}, {"$addToSet": {"reaction_notified": u["id"]}}, upsert=True,
+        )
+        who = (u.get("name") or "Someone").split(" ")[0]
+        title = item.get("title", "a video")
+        if u["role"] == "elder":
+            await notify_family(eid, "reaction", f"{who} reacted to \"{title}\"",
+                                 f"{who} reacted to a video you might enjoy too.", {"content_id": cid})
+        else:
+            await notify_elder(eid, "reaction", f"{who} reacted to \"{title}\"",
+                                f"{who} reacted to \"{title}\".", {"content_id": cid})
+    return await _content_view(item, eid, u)
+
+
+@api.get("/content/{cid}/comments")
+async def list_content_comments(cid: str, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    return await db.content_comments.find({"content_id": cid, "elder_id": eid}, {"_id": 0}).sort("created_at", 1).to_list(200)
+
+
+class CommentIn(BaseModel):
+    text: str
+
+
+@api.post("/content/{cid}/comments")
+async def add_content_comment(cid: str, b: CommentIn, u: dict = Depends(current_user)):
+    item = _content_by_id(cid)
+    if not item:
+        raise HTTPException(404, "Video not found")
+    text = (b.text or "").strip()[:500]
+    if not text:
+        raise HTTPException(422, "Say something first")
+    eid = await elder_id_for(u)
+    doc = {
+        "id": str(uuid.uuid4()), "content_id": cid, "elder_id": eid,
+        "user_id": u["id"], "name": u.get("name") or "Someone", "role": u["role"],
+        "text": text, "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.content_comments.insert_one(doc.copy())
+    who = doc["name"].split(" ")[0]
+    title = item.get("title", "a video")
+    if u["role"] == "elder":
+        await notify_family(eid, "comment", f"{who} commented on \"{title}\"", f"“{text}”", {"content_id": cid})
+    else:
+        await notify_elder(eid, "comment", f"{who} commented on \"{title}\"", f"“{text}”", {"content_id": cid})
+    return doc
+
+
+@api.post("/content/{cid}/share")
+async def share_content(cid: str, u: dict = Depends(current_user)):
+    """Only the parent browses the catalogue today, so sharing only flows her way
+    out to family — but the like/react/comment endpoints above work for whoever
+    ends up watching, on either side, once it lands in their Shared videos."""
+    item = _content_by_id(cid)
+    if not item:
+        raise HTTPException(404, "Video not found")
+    if u["role"] != "elder":
+        raise HTTPException(403, "Only the parent can share a video from Watch")
+    eid = await elder_id_for(u)
+    doc = {
+        "id": str(uuid.uuid4()), "content_id": cid, "elder_id": eid,
+        "shared_by_user_id": u["id"], "shared_by_name": u.get("name") or "Your parent",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.content_shares.insert_one(doc.copy())
+    who = doc["shared_by_name"].split(" ")[0]
+    contacts = await notify_family(
+        eid, "video_share", "A video to watch together",
+        f"{who} shared \"{item['title']}\" with you.", {"content_id": cid},
+    )
+    return {"id": doc["id"], "shared_with": len(contacts)}
+
+
+@api.get("/family/shared-videos")
+async def shared_videos(u: dict = Depends(current_user)):
+    """What the parent has sent this way — newest first, each hydrated with its
+    catalogue details plus the same like/react/comment state as the Watch tab."""
+    eid = await elder_id_for(u)
+    shares = await db.content_shares.find({"elder_id": eid}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    out = []
+    seen = set()
+    for s in shares:
+        if s["content_id"] in seen:
+            continue
+        seen.add(s["content_id"])
+        item = _content_by_id(s["content_id"])
+        if not item:
+            continue
+        view = await _content_view(item, eid, u)
+        view["shared_by_name"] = s["shared_by_name"]
+        view["shared_at"] = s["created_at"]
+        out.append(view)
+    return out
 
 
 # ============================ HEALTH ============================

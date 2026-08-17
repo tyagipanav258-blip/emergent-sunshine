@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "@/src/auth";
-import { AuthHero } from "@/src/components/AuthHero";
+import { AuthHero, AuthBackground } from "@/src/components/AuthHero";
+import { KAMALA_PHOTO } from "@/src/constants/personas";
 import { theme } from "@/src/theme";
 
 export default function ElderLogin() {
@@ -63,8 +64,10 @@ export default function ElderLogin() {
   // Name step (signup only) uses a simple text input
   return (
     <View style={styles.root} testID="elder-login">
+      <AuthBackground />
       <AuthHero
         icon="happy"
+        photo={KAMALA_PHOTO}
         title={mode === "login" ? "Welcome back" : "Let's get you set up"}
         subtitle={mode === "login" ? "Log in with your phone and PIN" : "Just your name, phone and a PIN"}
         onBack={() => router.back()}
@@ -72,74 +75,76 @@ export default function ElderLogin() {
         compact
       />
 
-      {step === "name" ? (
-        <ScrollView contentContainerStyle={styles.nameWrap} keyboardShouldPersistTaps="handled">
-          <AppText style={styles.bigLabel}>What is your name?</AppText>
-          <TextField value={name} onChangeText={setName} placeholder="e.g. Kamala" testID="elder-name-input" />
-          <GradientButton tone="brand"
-            style={[styles.primaryBtn, !name.trim() && styles.btnDisabled]}
-            disabled={!name.trim()}
-            onPress={() => setStep("phone")}
-            testID="elder-name-next"
-          >
-            <AppText style={styles.primaryBtnText}>Continue</AppText>
-          </GradientButton>
-          <Pressable onPress={switchMode} style={styles.switchLink}>
-            <AppText style={styles.switchText}>Already have an account? <AppText style={styles.switchBold}>Log in</AppText></AppText>
-          </Pressable>
-        </ScrollView>
-      ) : (
-        <View style={styles.padArea}>
-          <AppText style={styles.bigLabel}>
-            {step === "phone" ? "Enter your phone number" : "Enter your 4-digit PIN"}
-          </AppText>
+      <View style={[styles.sheet, { marginBottom: insets.bottom + 16 }]}>
+        {step === "name" ? (
+          <ScrollView contentContainerStyle={styles.nameWrap} keyboardShouldPersistTaps="handled">
+            <AppText style={styles.bigLabel}>What is your name?</AppText>
+            <TextField value={name} onChangeText={setName} placeholder="e.g. Kamala" testID="elder-name-input" />
+            <GradientButton tone="brand"
+              style={[styles.primaryBtn, !name.trim() && styles.btnDisabled]}
+              disabled={!name.trim()}
+              onPress={() => setStep("phone")}
+              testID="elder-name-next"
+            >
+              <AppText style={styles.primaryBtnText}>Continue</AppText>
+            </GradientButton>
+            <Pressable onPress={switchMode} style={styles.switchLink}>
+              <AppText style={styles.switchText}>Already have an account? <AppText style={styles.switchBold}>Log in</AppText></AppText>
+            </Pressable>
+          </ScrollView>
+        ) : (
+          <View style={styles.padArea}>
+            <AppText style={styles.bigLabel}>
+              {step === "phone" ? "Enter your phone number" : "Enter your 4-digit PIN"}
+            </AppText>
 
-          {step === "phone" ? (
-            <AppText style={styles.phoneDisplay} testID="phone-display">{phone || "\u00A0"}</AppText>
-          ) : (
-            <View style={styles.pinDots}>
-              {[0, 1, 2, 3].map((i) => (
-                <View key={i} style={[styles.pinDot, i < pin.length && styles.pinDotFilled]} />
-              ))}
+            {step === "phone" ? (
+              <AppText style={styles.phoneDisplay} testID="phone-display">{phone || "\u00A0"}</AppText>
+            ) : (
+              <View style={styles.pinDots}>
+                {[0, 1, 2, 3].map((i) => (
+                  <View key={i} style={[styles.pinDot, i < pin.length && styles.pinDotFilled]} />
+                ))}
+              </View>
+            )}
+
+            {error ? <AppText style={styles.error} testID="elder-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : <View style={{ height: 24 }} />}
+
+            <Keypad onPress={press} onBack={back} />
+
+            <View style={styles.actionRow}>
+              {step === "pin" && (
+                <Pressable onPress={() => { setStep("phone"); setPin(""); }} style={styles.secondaryBtn}>
+                  <AppText style={styles.secondaryBtnText}>Back</AppText>
+                </Pressable>
+              )}
+              <Pressable
+                style={[
+                  styles.primaryBtn,
+                  { flex: 1 },
+                  ((step === "phone" && phone.length < 7) || (step === "pin" && pin.length < 4) || busy) && styles.btnDisabled,
+                ]}
+                disabled={(step === "phone" && phone.length < 7) || (step === "pin" && pin.length < 4) || busy}
+                onPress={() => (step === "phone" ? setStep("pin") : submit())}
+                testID="elder-submit"
+              >
+                <AppText style={styles.primaryBtnText}>
+                  {busy ? "Please wait..." : step === "phone" ? "Continue" : mode === "login" ? "Log in" : "Create account"}
+                </AppText>
+              </Pressable>
             </View>
-          )}
 
-          {error ? <AppText style={styles.error} testID="elder-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : <View style={{ height: 24 }} />}
-
-          <Keypad onPress={press} onBack={back} />
-
-          <View style={styles.actionRow}>
-            {step === "pin" && (
-              <Pressable onPress={() => { setStep("phone"); setPin(""); }} style={styles.secondaryBtn}>
-                <AppText style={styles.secondaryBtnText}>Back</AppText>
+            {step === "phone" && (
+              <Pressable onPress={switchMode} style={styles.switchLink}>
+                <AppText style={styles.switchText}>
+                  {mode === "login" ? "New here? " : "Have an account? "}
+                  <AppText style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</AppText>
+                </AppText>
               </Pressable>
             )}
-            <Pressable
-              style={[
-                styles.primaryBtn,
-                { flex: 1 },
-                ((step === "phone" && phone.length < 7) || (step === "pin" && pin.length < 4) || busy) && styles.btnDisabled,
-              ]}
-              disabled={(step === "phone" && phone.length < 7) || (step === "pin" && pin.length < 4) || busy}
-              onPress={() => (step === "phone" ? setStep("pin") : submit())}
-              testID="elder-submit"
-            >
-              <AppText style={styles.primaryBtnText}>
-                {busy ? "Please wait..." : step === "phone" ? "Continue" : mode === "login" ? "Log in" : "Create account"}
-              </AppText>
-            </Pressable>
           </View>
-
-          {step === "phone" && (
-            <Pressable onPress={switchMode} style={styles.switchLink}>
-              <AppText style={styles.switchText}>
-                {mode === "login" ? "New here? " : "Have an account? "}
-                <AppText style={styles.switchBold}>{mode === "login" ? "Create account" : "Log in"}</AppText>
-              </AppText>
-            </Pressable>
-          )}
-        </View>
-      )}
+        )}
+      </View>
     </View>
   );
 }
@@ -193,6 +198,10 @@ function TextField(props: any) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: theme.colors.surface },
+  sheet: {
+    flex: 1, marginHorizontal: 16, borderRadius: 32,
+    backgroundColor: theme.colors.surface, overflow: "hidden",
+  },
   bigLabel: { fontSize: 24, fontWeight: "700", color: theme.colors.onSurface, textAlign: "center", marginTop: 12 },
   nameWrap: { gap: 20, paddingTop: 32, paddingHorizontal: 24 },
   textField: {

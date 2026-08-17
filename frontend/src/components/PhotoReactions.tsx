@@ -30,8 +30,14 @@ const CHOICES: { id: string; icon: any; label: string; tint: string }[] = [
  * than a pile, and the sharer is told once, not on every tap.
  */
 export function PhotoReactions({
-  photo, onChange, compact = false,
-}: { photo: Reactable; onChange?: (next: Reactable) => void; compact?: boolean }) {
+  photo, onChange, compact = false, endpoint,
+}: {
+  photo: Reactable;
+  onChange?: (next: Reactable) => void;
+  compact?: boolean;
+  /** Defaults to a shared photo; pass a different resource's react endpoint (e.g. a video) to reuse this same picker there. */
+  endpoint?: (id: string) => string;
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const [local, setLocal] = useState<Reactable>(photo);
   const state = local.id === photo.id ? local : photo;
@@ -57,9 +63,8 @@ export function PhotoReactions({
     setLocal(optimistic);
     onChange?.(optimistic);
     try {
-      const saved = await apiFetch<Reactable>(`/family/photos/${photo.id}/react`, {
-        method: "POST", body: { emoji },
-      });
+      const url = endpoint ? endpoint(photo.id) : `/family/photos/${photo.id}/react`;
+      const saved = await apiFetch<Reactable>(url, { method: "POST", body: { emoji } });
       setLocal(saved);
       onChange?.(saved);
     } catch {

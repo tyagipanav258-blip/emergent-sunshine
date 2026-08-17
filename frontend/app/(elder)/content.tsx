@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform, Share } from "react-native";
+import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -8,12 +8,18 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, logActivity } from "@/src/api";
+import { CommentSheet } from "@/src/components/CommentSheet";
+import { ReactionSheet } from "@/src/components/ReactionSheet";
 import { theme } from "@/src/theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
 const CATS = ["All", "Spiritual", "Bhajans", "Songs", "Devotional", "Exercise", "Yoga", "Recipes", "Travel"];
 
-type Reel = { id: string; creator: string; creator_avatar: string; title: string; description: string; category: string; video_url: string; thumbnail_url: string; likes: number };
+type Reel = {
+  id: string; creator: string; creator_avatar: string; title: string; description: string;
+  category: string; video_url: string; thumbnail_url: string;
+  likes: number; liked: boolean; reactions: Record<string, number>; my_reaction: string | null; comment_count: number;
+};
 
 export default function ElderContent() {
   const insets = useSafeAreaInsets();
@@ -22,7 +28,9 @@ export default function ElderContent() {
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(true);
   const [itemH, setItemH] = useState(0);
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
+  const [reactFor, setReactFor] = useState<Reel | null>(null);
+  const [commentFor, setCommentFor] = useState<Reel | null>(null);
+  const [toast, setToast] = useState("");
 
   const load = useCallback(async (c: string) => {
     setLoading(true);
@@ -36,6 +44,38 @@ export default function ElderContent() {
 
   useEffect(() => { logActivity("Watch"); }, []);
   useEffect(() => { load(cat); }, [cat, load]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 2200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const patchReel = (id: string, patch: Partial<Reel>) => {
+    setReels((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  };
+
+  const toggleLike = async (reel: Reel) => {
+    if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Instant feedback; reconciled with the server's count right after.
+    patchReel(reel.id, { liked: !reel.liked, likes: reel.likes + (reel.liked ? -1 : 1) });
+    try {
+      const saved = await apiFetch<Reel>(`/content/${reel.id}/like`, { method: "POST" });
+      patchReel(reel.id, saved);
+    } catch {
+      patchReel(reel.id, reel);
+    }
+  };
+
+  const shareWithFamily = async (reel: Reel) => {
+    if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    try {
+      await apiFetch(`/content/${reel.id}/share`, { method: "POST" });
+      setToast(`Shared "${reel.title}" with your family`);
+    } catch {
+      setToast("Could not share that just now");
+    }
+  };
 
   const viewCfg = useRef({ itemVisiblePercentThreshold: 80 }).current;
   const onView = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
@@ -58,7 +98,15 @@ export default function ElderContent() {
           viewabilityConfig={viewCfg}
           getItemLayout={(_, index) => ({ length: itemH, offset: itemH * index, index })}
           renderItem={({ item, index }) => (
-            <ReelItem reel={item} active={index === active} height={itemH} liked={!!liked[item.id]} onLike={() => { if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setLiked((p) => ({ ...p, [item.id]: !p[item.id] })); }} />
+            <ReelItem
+              reel={item}
+              active={index === active}
+              height={itemH}
+              onLike={() => toggleLike(item)}
+              onReact={() => setReactFor(item)}
+              onComment={() => setCommentFor(item)}
+              onShare={() => shareWithFamily(item)}
+            />
           )}
         />
       )}
@@ -76,11 +124,36 @@ export default function ElderContent() {
           })}
         </ScrollView>
       </LinearGradient>
+
+      {reactFor && (
+        <ReactionSheet
+          item={reactFor}
+          title={reactFor.title}
+          endpoint={(id) => `/content/${id}/react`}
+          onChange={(next) => patchReel(reactFor.id, next as Partial<Reel>)}
+          onClose={() => setReactFor(null)}
+        />
+      )}
+      {commentFor && (
+        <CommentSheet
+          contentId={commentFor.id}
+          title={commentFor.title}
+          onCountChange={(count) => patchReel(commentFor.id, { comment_count: count })}
+          onClose={() => setCommentFor(null)}
+        />
+      )}
+      {!!toast && (
+        <View style={[styles.toast, { bottom: insets.bottom + 100 }]} pointerEvents="none">
+          <AppText style={styles.toastText}>{toast}</AppText>
+        </View>
+      )}
     </View>
   );
 }
 
-function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active: boolean; height: number; liked: boolean; onLike: () => void }) {
+function ReelItem({
+  reel, active, height, onLike, onReact, onComment, onShare,
+}: { reel: Reel; active: boolean; height: number; onLike: () => void; onReact: () => void; onComment: () => void; onShare: () => void }) {
   const insets = useSafeAreaInsets();
   const player = useVideoPlayer(reel.video_url, (p) => { p.loop = true; });
   const [playing, setPlaying] = useState(true);
@@ -90,6 +163,7 @@ function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active:
   }, [active, player]);
 
   const toggle = () => { if (playing) { player.pause(); setPlaying(false); } else { player.play(); setPlaying(true); } };
+  const myTopReaction = Object.entries(reel.reactions || {}).sort((a, b) => b[1] - a[1])[0];
 
   return (
     <View style={[styles.reel, { height }]} testID={`reel-${reel.id}`}>
@@ -110,22 +184,42 @@ function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active:
           onPress={onLike}
           testID={`like-${reel.id}`}
           accessibilityRole="button"
-          accessibilityLabel={liked ? "Remove like" : "Like this video"}
+          accessibilityLabel={reel.liked ? "Remove like" : "Like this video"}
         >
-          <View style={styles.railCircle}><Ionicons name={liked ? "heart" : "heart-outline"} size={30} color={liked ? theme.colors.marigold : "#fff"} /></View>
-          <AppText style={styles.railLabel}>{liked ? reel.likes + 1 : reel.likes}</AppText>
+          <View style={styles.railCircle}><Ionicons name={reel.liked ? "heart" : "heart-outline"} size={30} color={reel.liked ? theme.colors.marigold : "#fff"} /></View>
+          <AppText style={styles.railLabel}>{reel.likes}</AppText>
         </Pressable>
         <Pressable
           style={styles.railBtn}
-          onPress={() =>
-            Share.share({ message: `${reel.title} — ${reel.description}\n\nShared from Sunshine` }).catch(() => {})
-          }
+          onPress={onReact}
+          testID={`react-${reel.id}`}
+          accessibilityRole="button"
+          accessibilityLabel="Choose a reaction"
+        >
+          <View style={styles.railCircle}>
+            <Ionicons name={reel.my_reaction ? "happy" : "happy-outline"} size={28} color={reel.my_reaction ? theme.colors.marigold : "#fff"} />
+          </View>
+          <AppText style={styles.railLabel}>{myTopReaction ? myTopReaction[1] : "React"}</AppText>
+        </Pressable>
+        <Pressable
+          style={styles.railBtn}
+          onPress={onComment}
+          testID={`comment-${reel.id}`}
+          accessibilityRole="button"
+          accessibilityLabel={`Comments, ${reel.comment_count}`}
+        >
+          <View style={styles.railCircle}><Ionicons name="chatbubble-ellipses-outline" size={26} color="#fff" /></View>
+          <AppText style={styles.railLabel}>{reel.comment_count || "Comment"}</AppText>
+        </Pressable>
+        <Pressable
+          style={styles.railBtn}
+          onPress={onShare}
           testID={`share-${reel.id}`}
           accessibilityRole="button"
-          accessibilityLabel="Share this video"
+          accessibilityLabel="Share this video with your family"
         >
-          <View style={styles.railCircle}><Ionicons name="share-social" size={28} color="#fff" /></View>
-          <AppText style={styles.railLabel}>Share</AppText>
+          <View style={styles.railCircle}><Ionicons name="people" size={26} color="#fff" /></View>
+          <AppText style={styles.railLabel}>Family</AppText>
         </Pressable>
       </View>
       <View style={[styles.info, { paddingBottom: insets.bottom + 24 }]}>
@@ -155,9 +249,9 @@ const styles = StyleSheet.create({
   chipOn: { backgroundColor: theme.colors.marigold, borderColor: theme.colors.marigold },
   chipText: { color: "#fff", fontSize: 16, fontWeight: "700" },
   chipTextOn: { color: theme.colors.onMarigold },
-  rail: { position: "absolute", right: 14, gap: 18, alignItems: "center" },
+  rail: { position: "absolute", right: 14, gap: 16, alignItems: "center" },
   railBtn: { alignItems: "center", gap: 4 },
-  railCircle: { width: 54, height: 54, borderRadius: 27, backgroundColor: "rgba(0,0,0,0.45)", alignItems: "center", justifyContent: "center" },
+  railCircle: { width: 50, height: 50, borderRadius: 25, backgroundColor: "rgba(0,0,0,0.45)", alignItems: "center", justifyContent: "center" },
   railLabel: { color: "#fff", fontSize: 13, fontWeight: "700" },
   info: { position: "absolute", left: 16, right: 90, bottom: 0, gap: 6 },
   catPill: { alignSelf: "flex-start", backgroundColor: theme.colors.marigold, paddingHorizontal: 12, paddingVertical: 4, borderRadius: 999 },
@@ -167,4 +261,9 @@ const styles = StyleSheet.create({
   creator: { color: "#fff", fontSize: 16, fontWeight: "700" },
   reelTitle: { color: "#fff", fontSize: 24, fontWeight: "800", marginTop: 4 },
   reelDesc: { color: "rgba(255,255,255,0.9)", fontSize: 16, lineHeight: 22 },
+  toast: {
+    position: "absolute", left: 24, right: 24, backgroundColor: "rgba(20,20,20,0.92)",
+    borderRadius: 16, paddingVertical: 14, paddingHorizontal: 18, alignItems: "center",
+  },
+  toastText: { color: "#fff", fontSize: 15, fontWeight: "700", textAlign: "center" },
 });
