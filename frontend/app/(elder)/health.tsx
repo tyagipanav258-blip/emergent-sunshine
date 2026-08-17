@@ -317,7 +317,7 @@ export default function ElderHealth() {
 
         {/* Medicines list */}
         <View style={styles.sectionRow}>
-          <AppText style={styles.section}>My Medicines</AppText>
+          <AppText style={styles.sectionInRow}>My Medicines</AppText>
           <Pressable
             style={styles.scanBtn}
             onPress={() => setOcr({ open: true })}
@@ -840,6 +840,8 @@ const styles = StyleSheet.create({
   intakeNotText: { color: theme.colors.onSurface, fontSize: 18, fontWeight: "700" },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
   section: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
+  // Inside sectionRow the row already supplies the spacing and side padding.
+  sectionInRow: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface },
   scanBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: theme.colors.brandLight, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999 },
   scanText: { color: theme.colors.brand, fontWeight: "800", fontSize: 15 },
   medList: { paddingHorizontal: 20, gap: 12 },
