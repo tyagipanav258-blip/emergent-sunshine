@@ -21,7 +21,10 @@ export const theme = {
     success: '#2D6A4F',
     // Darkened from #B56D00 to clear 4.5:1 against the cream surface.
     warning: '#8A5400',
-    error: '#D62828',
+    // Muted brick rather than a hot alarm red. Better contrast than the
+    // brighter red it replaces (5.7:1 vs 4.9:1 on cream) and far calmer to sit
+    // beside all day.
+    error: '#A8443C',
     onError: '#FFFFFF',
     info: '#457B9D',
 
@@ -53,14 +56,19 @@ export const theme = {
  * sweep from a lighter corner into a deeper one — but built from Sunshine's own
  * sage and marigold so the app still reads as elder care rather than social.
  *
- * Every stop on a white-text gradient clears 4.5:1, so a button stays legible
- * across its whole face, not just in the middle.
+ * Each sweep spans roughly a 4x luminance range, so the fade is clearly visible
+ * rather than a flat colour with a hint of shading. The lightest stop of every
+ * white-text gradient is set as bright as 4.5:1 allows and no brighter — that
+ * is what buys the width while keeping a label legible across the whole face.
  */
 export const gradients = {
-  brand: ["#4C7654", "#3A5A40", "#2B4733"],
-  success: ["#388360", "#2D6A4F", "#1F5138"],
-  danger: ["#CF4632", "#D62828", "#B01F1F"],
-  info: ["#4A7B95", "#457B9D", "#2F5D7C"],
+  brand: ["#4D8151", "#3A5A40", "#22401F"],
+  success: ["#39825E", "#2A6B4C", "#15452F"],
+  // A muted rose-brick rather than a hot red. On a screen an older adult looks
+  // at all day, a bright alarm colour sitting there permanently reads as being
+  // shouted at — this stays clearly the emergency colour without the glare.
+  danger: ["#B15E52", "#9A3F38", "#6E2420"],
+  info: ["#447B99", "#37637F", "#204257"],
   /** Carries dark text, so it can stay bright. */
   sunrise: ["#FFE08A", "#FFB703", "#F08C00"],
   /** The logo mark: a full sunrise, warm gold falling into coral. */
