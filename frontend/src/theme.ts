@@ -48,6 +48,31 @@ export const theme = {
   fabClearance: 96,
 } as const;
 
+/**
+ * Diagonal multi-stop gradients, in the manner of the Instagram mark — a warm
+ * sweep from a lighter corner into a deeper one — but built from Sunshine's own
+ * sage and marigold so the app still reads as elder care rather than social.
+ *
+ * Every stop on a white-text gradient clears 4.5:1, so a button stays legible
+ * across its whole face, not just in the middle.
+ */
+export const gradients = {
+  brand: ["#4C7654", "#3A5A40", "#2B4733"],
+  success: ["#388360", "#2D6A4F", "#1F5138"],
+  danger: ["#CF4632", "#D62828", "#B01F1F"],
+  info: ["#4A7B95", "#457B9D", "#2F5D7C"],
+  /** Carries dark text, so it can stay bright. */
+  sunrise: ["#FFE08A", "#FFB703", "#F08C00"],
+  /** The logo mark: a full sunrise, warm gold falling into coral. */
+  logo: ["#FFDE7A", "#FFB703", "#F97316", "#E0526D"],
+  /** Soft tints for icon wells and cards. */
+  brandSoft: ["#F0F4EF", "#E2EAE1"],
+  sunriseSoft: ["#FFF6E0", "#FFEFC7"],
+} as const;
+
+/** Top-left to bottom-right, the diagonal that gives a gradient its lift. */
+export const DIAGONAL = { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } as const;
+
 export type FontStep = keyof typeof theme.font;
 
 /** Text-size steps offered in Profile > Accessibility. */

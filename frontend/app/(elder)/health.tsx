@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Platform, TextInput, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientFill } from "@/src/components/GradientFill";
+import { GradientButton } from "@/src/components/GradientButton";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -197,7 +199,7 @@ export default function ElderHealth() {
               : `${steps.today} steps today. Open your weekly walking summary.`
           }
         >
-          <View style={styles.stepsIcon}><Ionicons name="walk" size={30} color={theme.colors.brand} /></View>
+          <View style={styles.stepsIcon}><GradientFill tone="brandSoft" radius={28} /><Ionicons name="walk" size={30} color={theme.colors.brand} /></View>
           <View style={{ flex: 1 }}>
             {/* A count already synced from a phone is worth showing even where
                 this device has no sensor of its own. */}
@@ -246,7 +248,7 @@ export default function ElderHealth() {
 
         {/* Intake prompt */}
         {nextDue ? (
-          <View style={styles.intake} testID="intake-prompt">
+          <View style={styles.intake} testID="intake-prompt"><GradientFill tone="sunriseSoft" radius={28} />
             <Image source={{ uri: nextDue.image }} style={styles.intakeImg} />
             <AppText style={styles.intakeQ}>Did you take your {nextDue.name}?</AppText>
             <AppText style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</AppText>
@@ -273,7 +275,7 @@ export default function ElderHealth() {
             </View>
           </View>
         ) : meds.length === 0 ? (
-          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-empty">
+          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-empty"><GradientFill tone="sunriseSoft" radius={28} />
             <Ionicons name="camera" size={54} color={theme.colors.marigoldDark} />
             <AppText style={styles.intakeQ}>Let&apos;s add your medicines</AppText>
             <AppText style={styles.intakeMeta}>
@@ -291,7 +293,7 @@ export default function ElderHealth() {
             </Pressable>
           </View>
         ) : (
-          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-done">
+          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-done"><GradientFill tone="sunriseSoft" radius={28} />
             <Ionicons name="checkmark-done-circle" size={54} color={theme.colors.success} />
             <AppText style={styles.intakeQ}>All medicines taken today</AppText>
             <AppText style={styles.intakeMeta}>Wonderful! Keep it up.</AppText>
@@ -429,12 +431,12 @@ export default function ElderHealth() {
                         <AppText style={styles.ocrItemText}>{m.name} {m.dose ? `• ${m.dose}` : ""} • {m.time}</AppText>
                       </View>
                     ))}
-                    <Pressable style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><AppText style={styles.primaryBtnText}>Add to my medicines</AppText></Pressable>
+                    <GradientButton tone="brand" style={styles.primaryBtn} onPress={addOcrMeds} testID="ocr-add"><AppText style={styles.primaryBtnText}>Add to my medicines</AppText></GradientButton>
                   </>
                 ) : (
                   <>
                     <AppText style={styles.sheetSub}>We couldn&apos;t read any medicines, but the photo is saved for your family to check.</AppText>
-                    <Pressable style={styles.primaryBtn} onPress={() => setOcr({ open: false })}><AppText style={styles.primaryBtnText}>Done</AppText></Pressable>
+                    <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => setOcr({ open: false })}><AppText style={styles.primaryBtnText}>Done</AppText></GradientButton>
                   </>
                 )}
               </View>
@@ -446,7 +448,7 @@ export default function ElderHealth() {
             ) : (
               <View style={{ gap: 12, alignSelf: "stretch" }}>
                 <AppText style={styles.sheetSub}>Take a clear photo of your prescription and we&apos;ll add your medicines for you.</AppText>
-                <Pressable style={styles.primaryBtn} onPress={() => capturePrescription(true)} testID="ocr-camera"><Ionicons name="camera" size={22} color="#fff" /><AppText style={styles.primaryBtnText}>  Take a photo</AppText></Pressable>
+                <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => capturePrescription(true)} testID="ocr-camera"><Ionicons name="camera" size={22} color="#fff" /><AppText style={styles.primaryBtnText}>  Take a photo</AppText></GradientButton>
                 <Pressable style={styles.secondaryBtn} onPress={() => capturePrescription(false)} testID="ocr-gallery"><AppText style={styles.secondaryBtnText}>Choose from gallery</AppText></Pressable>
               </View>
             )}
@@ -462,18 +464,18 @@ export default function ElderHealth() {
             <View style={styles.handle} />
             {concierge.done ? (
               <View style={{ alignItems: "center", gap: 10 }}>
-                <View style={styles.sosDone}><Ionicons name="checkmark" size={40} color="#fff" /></View>
+                <View style={styles.sosDone}><GradientFill tone="success" radius={36} /><Ionicons name="checkmark" size={40} color="#fff" /></View>
                 <AppText style={styles.sheetTitle}>Request sent!</AppText>
                 <AppText style={styles.sheetSub}>&quot;{concierge.done}&quot; was sent to your family. They will arrange it and you can track it in your Profile.</AppText>
-                <Pressable style={styles.primaryBtn} onPress={() => setConcierge({ open: false, text: "" })}><AppText style={styles.primaryBtnText}>OK</AppText></Pressable>
+                <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => setConcierge({ open: false, text: "" })}><AppText style={styles.primaryBtnText}>OK</AppText></GradientButton>
               </View>
             ) : (
               <View style={{ alignSelf: "stretch", gap: 12 }}>
                 <AppText style={styles.sheetTitle}>What can we arrange?</AppText>
                 <TextInput style={styles.input} placeholder="e.g. Book a taxi to the clinic tomorrow" placeholderTextColor={theme.colors.muted} value={concierge.text} onChangeText={(t) => setConcierge((c) => ({ ...c, text: t }))} multiline testID="concierge-input" />
-                <Pressable style={[styles.primaryBtn, (!concierge.text.trim() || concierge.busy) && { opacity: 0.5 }]} disabled={!concierge.text.trim() || concierge.busy} onPress={() => sendConcierge()} testID="concierge-send">
+                <GradientButton tone="brand" style={[styles.primaryBtn, (!concierge.text.trim() || concierge.busy) && { opacity: 0.5 }]} disabled={!concierge.text.trim() || concierge.busy} onPress={() => sendConcierge()} testID="concierge-send">
                   <AppText style={styles.primaryBtnText}>{concierge.busy ? "Sending..." : "Send to family"}</AppText>
-                </Pressable>
+                </GradientButton>
               </View>
             )}
           </View>
@@ -492,10 +494,10 @@ export default function ElderHealth() {
                 <View style={styles.sosDone}><Ionicons name="checkmark" size={40} color="#fff" /></View>
                 <AppText style={styles.sheetTitle}>All set</AppText>
                 <AppText style={styles.sheetSub}>{assign.done}</AppText>
-                <Pressable style={styles.primaryBtn} onPress={() => setAssign(null)} testID="assign-done"
+                <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => setAssign(null)} testID="assign-done"
                   accessibilityRole="button" accessibilityLabel="Close">
                   <AppText style={styles.primaryBtnText}>OK</AppText>
-                </Pressable>
+                </GradientButton>
               </>
             ) : assign.busy ? (
               <View style={{ alignItems: "center", gap: 12, paddingVertical: 24 }}>
@@ -566,7 +568,7 @@ export default function ElderHealth() {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => !removing && setRemove(null)} accessibilityLabel="Close" />
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.handle} />
-            <View style={styles.removeIcon}><Ionicons name="trash" size={36} color="#fff" /></View>
+            <View style={styles.removeIcon}><GradientFill tone="danger" radius={36} /><Ionicons name="trash" size={36} color="#fff" /></View>
             <AppText style={styles.sheetTitle}>Remove {remove.name}?</AppText>
             <AppText style={styles.sheetSub}>
               It will disappear from your list, along with its reminders and its record of the doses you took.
@@ -575,10 +577,10 @@ export default function ElderHealth() {
               <ActivityIndicator size="large" color={theme.colors.error} style={{ marginVertical: 16 }} />
             ) : (
               <>
-                <Pressable style={styles.dangerBtn} onPress={deleteMed} testID="remove-confirm"
+                <GradientButton tone="danger" style={styles.dangerBtn} onPress={deleteMed} testID="remove-confirm"
                   accessibilityRole="button" accessibilityLabel={`Yes, remove ${remove.name}`}>
                   <AppText style={styles.dangerBtnText}>Yes, remove it</AppText>
-                </Pressable>
+                </GradientButton>
                 <Pressable style={styles.secondaryBtn} onPress={() => setRemove(null)} testID="remove-cancel"
                   accessibilityRole="button" accessibilityLabel="Keep this medicine">
                   <AppText style={styles.secondaryBtnText}>Keep it</AppText>
@@ -615,10 +617,10 @@ export default function ElderHealth() {
                 <AppText style={styles.disclaimer}>{explain.data?.disclaimer}</AppText>
               </View>
             )}
-            <Pressable style={styles.primaryBtn} onPress={() => setExplain(null)} testID="explain-close"
+            <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => setExplain(null)} testID="explain-close"
               accessibilityRole="button" accessibilityLabel="Close">
               <AppText style={styles.primaryBtnText}>Close</AppText>
-            </Pressable>
+            </GradientButton>
           </View>
         </View>
       )}
@@ -677,10 +679,10 @@ export default function ElderHealth() {
               </>
             )}
 
-            <Pressable style={styles.primaryBtn} onPress={() => setStepsOpen(false)} testID="steps-close"
+            <GradientButton tone="brand" style={styles.primaryBtn} onPress={() => setStepsOpen(false)} testID="steps-close"
               accessibilityRole="button" accessibilityLabel="Close">
               <AppText style={styles.primaryBtnText}>Close</AppText>
-            </Pressable>
+            </GradientButton>
           </View>
         </View>
       )}
@@ -702,7 +704,7 @@ export default function ElderHealth() {
             >
               <AppText style={styles.secondaryBtnText}>No, I haven&apos;t taken it</AppText>
             </Pressable>
-            <Pressable
+            <GradientButton tone="brand"
               style={styles.primaryBtn}
               onPress={() => setUndo(null)}
               testID="undo-keep"
@@ -710,7 +712,7 @@ export default function ElderHealth() {
               accessibilityLabel="Keep it marked as taken"
             >
               <AppText style={styles.primaryBtnText}>Keep it, I took it</AppText>
-            </Pressable>
+            </GradientButton>
           </View>
         </View>
       )}
@@ -767,7 +769,7 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
   greeting: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface },
   sub: { fontSize: 17, color: theme.colors.muted, marginTop: 4 },
-  intake: { marginHorizontal: 20, backgroundColor: theme.colors.marigoldLight, borderRadius: 28, padding: 24, alignItems: "center", gap: 6, borderWidth: 2, borderColor: theme.colors.marigold },
+  intake: { marginHorizontal: 20, borderRadius: 28, overflow: "hidden", padding: 24, alignItems: "center", gap: 6, borderWidth: 2, borderColor: theme.colors.marigold },
   missedBanner: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20, marginBottom: 14, backgroundColor: theme.colors.error + "16", borderRadius: 20, padding: 16, borderWidth: 1.5, borderColor: theme.colors.error + "55" },
   missedTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.error },
   missedSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 19 },

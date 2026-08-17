@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, Platform, ActivityIndicator, Share } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientButton } from "@/src/components/GradientButton";
 import * as Clipboard from "expo-clipboard";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -118,7 +119,7 @@ export default function ElderProfile() {
               : "Nobody is connected yet. Send this to your son or daughter so they can look after you."}
           </AppText>
           <View style={styles.codeBtns}>
-            <Pressable
+            <GradientButton tone="brand"
               style={styles.shareBtn}
               onPress={shareCode}
               testID="share-family-code"
@@ -128,7 +129,7 @@ export default function ElderProfile() {
             >
               <Ionicons name="share-social" size={22} color="#fff" />
               <AppText style={styles.shareBtnText}>Invite family</AppText>
-            </Pressable>
+            </GradientButton>
             <Pressable
               style={styles.copyBtn}
               onPress={copyCode}
@@ -143,8 +144,9 @@ export default function ElderProfile() {
         </View>
 
         {/* I'm Okay */}
-        <Pressable
-          style={[styles.okay, okay.state === "sent" && { backgroundColor: theme.colors.success }]}
+        <GradientButton
+          tone={okay.state === "sent" ? "success" : "sunrise"}
+          style={styles.okay}
           onPress={sendOkay}
           testID="im-okay-btn"
           accessibilityRole="button"
@@ -155,12 +157,14 @@ export default function ElderProfile() {
             <Ionicons name={okay.state === "sent" ? "checkmark-circle" : "sunny"} size={30} color="#fff" />
           </View>
           <View style={{ flex: 1 }}>
-            <AppText style={styles.okayTitle}>{okay.state === "sent" ? "Sent" : "I'm Okay"}</AppText>
-            <AppText style={styles.okaySub}>
+            <AppText style={[styles.okayTitle, okay.state === "sent" && styles.okayTitleSent]}>
+              {okay.state === "sent" ? "Sent" : "I'm Okay"}
+            </AppText>
+            <AppText style={[styles.okaySub, okay.state === "sent" && styles.okaySubSent]}>
               {okay.state === "sent" ? okay.message : "One tap to reassure your family"}
             </AppText>
           </View>
-        </Pressable>
+        </GradientButton>
 
         {/* Real family only */}
         <AppText style={styles.section}>Stay Connected</AppText>
@@ -315,10 +319,12 @@ const styles = StyleSheet.create({
   sizeBtnSample: { fontWeight: "800", color: theme.colors.onSurface },
   sizeBtnText: { fontSize: theme.font.xs, fontWeight: "700", color: theme.colors.muted },
   sizeBtnTextOn: { color: theme.colors.brand },
-  okay: { flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigold, borderRadius: 24, padding: 20 },
+  okay: { flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, marginTop: 16, borderRadius: 24, padding: 20 },
   okayIcon: { width: 54, height: 54, borderRadius: 27, backgroundColor: "rgba(0,0,0,0.15)", alignItems: "center", justifyContent: "center" },
   okayTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onMarigold },
+  okayTitleSent: { color: "#fff" },
   okaySub: { fontSize: 15, color: "#4A3D00", marginTop: 2 },
+  okaySubSent: { color: "rgba(255,255,255,0.92)" },
   section: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
   callRow: { flexDirection: "row", gap: 12, paddingHorizontal: 20 },
   callBtn: { flex: 1, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 16, alignItems: "center", gap: 8, borderWidth: 1, borderColor: theme.colors.border },

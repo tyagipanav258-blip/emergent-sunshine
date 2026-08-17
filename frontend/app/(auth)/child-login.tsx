@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { View, StyleSheet, Pressable, TextInput, Platform } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientButton } from "@/src/components/GradientButton";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -80,7 +81,7 @@ export default function ChildLogin() {
 
         {error ? <AppText style={styles.error} testID="child-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : null}
 
-        <Pressable
+        <GradientButton tone="brand"
           style={[styles.primaryBtn, (!canSubmit || busy) && styles.btnDisabled]}
           disabled={!canSubmit || busy}
           onPress={submit}
@@ -89,7 +90,7 @@ export default function ChildLogin() {
           accessibilityLabel={mode === "login" ? "Log in" : "Create account"}
         >
           <AppText style={styles.primaryBtnText}>{busy ? "Please wait..." : mode === "login" ? "Log in" : "Create account"}</AppText>
-        </Pressable>
+        </GradientButton>
 
         <Pressable onPress={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }} style={styles.switchLink} testID="child-switch-mode">
           <AppText style={styles.switchText}>

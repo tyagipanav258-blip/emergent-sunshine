@@ -36,8 +36,10 @@ export default function RoleChooser() {
             <Ionicons name="happy" size={44} color={theme.colors.marigoldDark} />
           </View>
           <AppText style={styles.cardTitle}>I am using this for myself</AppText>
-          <AppText style={styles.cardSub}>Log in with your phone number and PIN</AppText>
-          <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
+          <View style={styles.cardFoot}>
+            <AppText style={styles.cardSub}>Log in with your phone number and PIN</AppText>
+            <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
+          </View>
         </Pressable>
 
         <Pressable
@@ -52,8 +54,10 @@ export default function RoleChooser() {
             <Ionicons name="people" size={40} color={theme.colors.brand} />
           </View>
           <AppText style={styles.cardTitle}>I am a family member</AppText>
-          <AppText style={styles.cardSub}>Care for your parent with email login</AppText>
-          <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
+          <View style={styles.cardFoot}>
+            <AppText style={styles.cardSub}>Care for your parent with email login</AppText>
+            <View style={styles.arrow}><Ionicons name="arrow-forward" size={26} color={theme.colors.brand} /></View>
+          </View>
         </Pressable>
       </View>
     </View>
@@ -76,6 +80,7 @@ const styles = StyleSheet.create({
   cardChild: {},
   iconWrap: { width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center", marginBottom: 16 },
   cardTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface },
-  cardSub: { fontSize: 16, color: theme.colors.muted, marginTop: 6, lineHeight: 22 },
-  arrow: { position: "absolute", right: 24, bottom: 24, width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  cardSub: { flex: 1, fontSize: 16, color: theme.colors.muted, lineHeight: 22 },
+  cardFoot: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 6 },
+  arrow: { width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center", flexShrink: 0 },
 });

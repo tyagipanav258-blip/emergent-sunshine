@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Tabs, useRouter } from "expo-router";
 import { View, Pressable, StyleSheet, Platform, ActivityIndicator, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientFill } from "@/src/components/GradientFill";
+import { GradientButton } from "@/src/components/GradientButton";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -72,7 +74,7 @@ export default function ElderLayout() {
           // over the screen, so they can never cover a medicine or a status.
           <View style={[styles.chrome, { paddingBottom: tabBarBottom }]} testID="elder-tabbar">
             <View style={styles.actionRow}>
-              <Pressable
+              <GradientButton tone="brand"
                 style={styles.assistantBtn}
                 onPress={() => {
                   if (Platform.OS !== "web") Haptics.selectionAsync();
@@ -85,8 +87,8 @@ export default function ElderLayout() {
               >
                 <Ionicons name="mic" size={24} color="#fff" />
                 <AppText style={styles.assistantText}>Ask Sunshine</AppText>
-              </Pressable>
-              <Pressable
+              </GradientButton>
+              <GradientButton tone="danger"
                 style={styles.sosBtn}
                 onPress={askSos}
                 testID="floating-sos"
@@ -96,7 +98,7 @@ export default function ElderLayout() {
               >
                 <Ionicons name="alert" size={24} color="#fff" />
                 <AppText style={styles.sosBtnText}>SOS</AppText>
-              </Pressable>
+              </GradientButton>
             </View>
 
             <View style={styles.bar}>
@@ -145,12 +147,12 @@ export default function ElderLayout() {
 
             {sos.stage === "confirm" && (
               <>
-                <View style={styles.sosBig}><Ionicons name="alert-circle" size={44} color="#fff" /></View>
+                <View style={styles.sosBig}><GradientFill tone="danger" radius={42} /><Ionicons name="alert-circle" size={44} color="#fff" /></View>
                 <AppText style={styles.sheetTitle}>Do you need help?</AppText>
                 <AppText style={styles.sheetSub}>
                   We will alert the family connected to your account. You can close this if you tapped by mistake.
                 </AppText>
-                <Pressable
+                <GradientButton tone="danger"
                   style={styles.confirmBtn}
                   onPress={sendSos}
                   testID="sos-confirm"
@@ -158,7 +160,7 @@ export default function ElderLayout() {
                   accessibilityLabel="Yes, alert my family"
                 >
                   <AppText style={styles.confirmBtnText}>Yes, alert my family</AppText>
-                </Pressable>
+                </GradientButton>
                 <Pressable
                   style={styles.cancelBtn}
                   onPress={() => setSos({ stage: "closed" })}
@@ -181,7 +183,7 @@ export default function ElderLayout() {
 
             {sos.stage === "done" && (
               <>
-                <View style={[styles.sosBig, sos.result.delivered && { backgroundColor: theme.colors.success }]}>
+                <View style={[styles.sosBig, sos.result.delivered && { backgroundColor: theme.colors.success }]}><GradientFill tone={sos.result.delivered ? "success" : "danger"} radius={42} />
                   <Ionicons name={sos.result.delivered ? "shield-checkmark" : "warning"} size={44} color="#fff" />
                 </View>
                 <AppText style={styles.sheetTitle}>
@@ -201,7 +203,7 @@ export default function ElderLayout() {
                 )}
 
                 {sos.result.emergency_number && (
-                  <Pressable
+                  <GradientButton tone="danger"
                     style={styles.emergencyBtn}
                     onPress={() => callEmergency(sos.result.emergency_number!)}
                     testID="sos-call-emergency"
@@ -210,10 +212,10 @@ export default function ElderLayout() {
                   >
                     <Ionicons name="call" size={22} color="#fff" />
                     <AppText style={styles.emergencyBtnText}>Call {sos.result.emergency_number} now</AppText>
-                  </Pressable>
+                  </GradientButton>
                 )}
 
-                <Pressable
+                <GradientButton tone="brand"
                   style={styles.okBtn}
                   onPress={() => setSos({ stage: "closed" })}
                   testID="sos-ok"
@@ -221,7 +223,7 @@ export default function ElderLayout() {
                   accessibilityLabel="Close"
                 >
                   <AppText style={styles.okBtnText}>Close</AppText>
-                </Pressable>
+                </GradientButton>
               </>
             )}
           </View>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { View, StyleSheet, Pressable, Platform, ScrollView, TextInput } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientButton } from "@/src/components/GradientButton";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -73,14 +74,14 @@ export default function ElderLogin() {
         <ScrollView contentContainerStyle={styles.nameWrap} keyboardShouldPersistTaps="handled">
           <AppText style={styles.bigLabel}>What is your name?</AppText>
           <TextField value={name} onChangeText={setName} placeholder="e.g. Kamala" testID="elder-name-input" />
-          <Pressable
+          <GradientButton tone="brand"
             style={[styles.primaryBtn, !name.trim() && styles.btnDisabled]}
             disabled={!name.trim()}
             onPress={() => setStep("phone")}
             testID="elder-name-next"
           >
             <AppText style={styles.primaryBtnText}>Continue</AppText>
-          </Pressable>
+          </GradientButton>
           <Pressable onPress={switchMode} style={styles.switchLink}>
             <AppText style={styles.switchText}>Already have an account? <AppText style={styles.switchBold}>Log in</AppText></AppText>
           </Pressable>

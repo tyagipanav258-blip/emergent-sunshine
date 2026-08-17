@@ -1,6 +1,8 @@
 import { useCallback, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, RefreshControl } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientFill } from "@/src/components/GradientFill";
+import { GradientButton } from "@/src/components/GradientButton";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -151,7 +153,7 @@ export default function ChildDashboard() {
                     accessibilityRole="button"
                     accessibilityLabel={`Play voice note from ${n.from_name}, ${timeAgo(n.created_at)}${unheard ? ", not heard yet" : ""}`}
                   >
-                    <View style={[styles.notePlay, playingId === n.id && { backgroundColor: theme.colors.success }]}>
+                    <View style={[styles.notePlay, playingId === n.id && { backgroundColor: theme.colors.success }]}><GradientFill tone={playingId === n.id ? "success" : "brand"} radius={23} />
                       <Ionicons name={playingId === n.id ? "volume-high" : "play"} size={22} color="#fff" />
                     </View>
                     <View style={{ flex: 1 }}>
@@ -199,7 +201,7 @@ export default function ChildDashboard() {
                     {inv.vendor} • {inv.items.map((it) => it.label).join(", ")}
                   </AppText>
                 </View>
-                <Pressable
+                <GradientButton tone="brand"
                   style={[styles.payBtn, paying === inv.id && { opacity: 0.6 }]}
                   disabled={paying === inv.id}
                   onPress={async () => {
@@ -215,7 +217,7 @@ export default function ChildDashboard() {
                   accessibilityLabel={`Pay ${inv.total} rupees for ${inv.title}`}
                 >
                   <AppText style={styles.payBtnText}>{paying === inv.id ? "..." : `Pay ₹${inv.total.toFixed(0)}`}</AppText>
-                </Pressable>
+                </GradientButton>
               </View>
             ))}
           </View>
@@ -312,7 +314,7 @@ export default function ChildDashboard() {
           </>
         )}
 
-        <Pressable
+        <GradientButton tone="brand"
           style={styles.callParent}
           onPress={() => router.push({ pathname: "/call", params: { name: data?.elder_name || "Parent", who: "parent" } })}
           testID="call-parent"
@@ -321,7 +323,7 @@ export default function ChildDashboard() {
         >
           <Ionicons name="videocam" size={22} color="#fff" />
           <AppText style={styles.callParentText}>Video call {data?.elder_name?.split(" ")[0]}</AppText>
-        </Pressable>
+        </GradientButton>
       </ScrollView>
 
       {viewer && (

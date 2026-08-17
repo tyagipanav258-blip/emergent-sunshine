@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientFill } from "@/src/components/GradientFill";
+import { GradientButton } from "@/src/components/GradientButton";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -83,12 +85,12 @@ export default function ChildProfile() {
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setHelpOpen(false)} accessibilityLabel="Close" />
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.handle} />
-            <View style={styles.helpIcon}><Ionicons name="help-buoy" size={36} color="#fff" /></View>
+            <View style={styles.helpIcon}><GradientFill tone="brand" radius={36} /><Ionicons name="help-buoy" size={36} color="#fff" /></View>
             <AppText style={styles.sheetTitle}>We\u2019re here to help</AppText>
             <AppText style={styles.sheetSub}>
               Questions about a request, a payment or your parent\u2019s account? Our team answers within a day.
             </AppText>
-            <Pressable
+            <GradientButton tone="brand"
               style={styles.helpBtn}
               onPress={() => Linking.openURL("mailto:help@sunshine.care?subject=Sunshine%20support").catch(() => {})}
               testID="help-email"
@@ -97,7 +99,7 @@ export default function ChildProfile() {
             >
               <Ionicons name="mail" size={22} color="#fff" />
               <AppText style={styles.helpBtnText}>  Email help@sunshine.care</AppText>
-            </Pressable>
+            </GradientButton>
             <Pressable style={styles.helpSecondary} onPress={() => setHelpOpen(false)} testID="help-close"
               accessibilityRole="button" accessibilityLabel="Close">
               <AppText style={styles.helpSecondaryText}>Close</AppText>

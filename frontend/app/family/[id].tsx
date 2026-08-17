@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { View, StyleSheet, FlatList, Pressable, ActivityIndicator, Platform, Dimensions } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientButton } from "@/src/components/GradientButton";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -159,11 +160,11 @@ export default function FamilyGallery() {
           )}
           ListFooterComponent={
             <View style={{ marginTop: 24, gap: 12 }}>
-              <Pressable style={styles.shareBtn} onPress={() => sharePhoto()} disabled={sharing}
+              <GradientButton tone="brand" style={styles.shareBtn} onPress={() => sharePhoto()} disabled={sharing}
                 testID="share-photo" accessibilityRole="button" accessibilityLabel="Share a photo with your family">
                 {sharing ? <ActivityIndicator color="#fff" /> : <Ionicons name="camera" size={22} color="#fff" />}
                 <AppText style={styles.shareBtnText}>{sharing ? "  Sharing..." : "  Share a photo"}</AppText>
-              </Pressable>
+              </GradientButton>
 
               <AppText style={styles.section}>From this phone</AppText>
               <AppText style={styles.hint}>

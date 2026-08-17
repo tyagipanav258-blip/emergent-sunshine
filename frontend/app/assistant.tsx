@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { View, StyleSheet, FlatList, Pressable, TextInput, ActivityIndicator, Platform, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { GradientFill } from "@/src/components/GradientFill";
+import { GradientButton } from "@/src/components/GradientButton";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -264,7 +266,7 @@ export default function AssistantScreen() {
           <Ionicons name="chevron-down" size={28} color={theme.colors.onSurface} />
         </Pressable>
         <View style={styles.hCenter}>
-          <View style={styles.hSun}><Ionicons name="sunny" size={22} color="#fff" /></View>
+          <View style={styles.hSun}><GradientFill tone="logo" radius={20} /><Ionicons name="sunny" size={22} color="#fff" /></View>
           <View>
             <AppText style={styles.hTitle}>Ask Sunshine</AppText>
             <AppText style={styles.hSub}>Just talk to me</AppText>
@@ -332,7 +334,7 @@ export default function AssistantScreen() {
         {/* Mic zone */}
         <View style={[styles.micZone, { paddingBottom: insets.bottom > 0 ? insets.bottom + 8 : 16 }]}>
           <AppText style={styles.status} accessibilityLiveRegion="polite">{status}</AppText>
-          <Pressable
+          <GradientButton tone="brand"
             style={[styles.mic, rec.recording && styles.micRec, busy && !rec.recording && styles.micBusy]}
             onPress={micPress}
             disabled={busy && !rec.recording}
@@ -345,13 +347,13 @@ export default function AssistantScreen() {
             ) : (
               <Ionicons name={rec.recording ? "stop" : "mic"} size={52} color="#fff" />
             )}
-          </Pressable>
+          </GradientButton>
 
           {status.includes("Settings") && (
-            <Pressable style={styles.settingsBtn} onPress={() => Linking.openSettings()} testID="assistant-settings"
+            <GradientButton tone="brand" style={styles.settingsBtn} onPress={() => Linking.openSettings()} testID="assistant-settings"
               accessibilityRole="button" accessibilityLabel="Open Settings">
               <AppText style={styles.settingsText}>Open Settings</AppText>
-            </Pressable>
+            </GradientButton>
           )}
 
           {!showType ? (
@@ -363,11 +365,11 @@ export default function AssistantScreen() {
             <View style={styles.inputRow}>
               <TextInput style={styles.input} placeholder="Type your message..." placeholderTextColor={theme.colors.muted}
                 value={input} onChangeText={setInput} testID="assistant-input" accessibilityLabel="Message for Sunshine" />
-              <Pressable style={[styles.send, (!input.trim() || busy) && { opacity: 0.5 }]} onPress={() => sendText(input)}
+              <GradientButton tone="brand" style={[styles.send, (!input.trim() || busy) && { opacity: 0.5 }]} onPress={() => sendText(input)}
                 disabled={!input.trim() || busy} testID="assistant-send"
                 accessibilityRole="button" accessibilityLabel="Send message">
                 <Ionicons name="arrow-up" size={24} color="#fff" />
-              </Pressable>
+              </GradientButton>
             </View>
           )}
         </View>
@@ -380,7 +382,7 @@ export default function AssistantScreen() {
             accessibilityLabel="Close" />
           <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.handle} />
-            <View style={[styles.sheetIcon, pending.kind === "sos" && { backgroundColor: theme.colors.error }]}>
+            <View style={[styles.sheetIcon, pending.kind === "sos" && { backgroundColor: theme.colors.error }]}><GradientFill tone={pending.kind === "sos" ? "danger" : "brand"} radius={40} />
               <Ionicons name={pending.kind === "sos" ? "alert-circle" : "call"} size={40} color="#fff" />
             </View>
             <AppText style={styles.sheetTitle}>
@@ -392,7 +394,7 @@ export default function AssistantScreen() {
                 : "Say “yes, do it” or tap the button below."}
             </AppText>
 
-            <Pressable
+            <GradientButton tone="danger"
               style={[styles.confirmBtn, pending.kind === "sos" && { backgroundColor: theme.colors.error }]}
               onPress={runPending}
               testID="confirm-yes"
@@ -402,7 +404,7 @@ export default function AssistantScreen() {
               <AppText style={styles.confirmBtnText}>
                 {pending.kind === "sos" ? "Yes, alert my family" : "Yes, do it"}
               </AppText>
-            </Pressable>
+            </GradientButton>
 
             <Pressable
               style={[styles.voiceConfirmBtn, rec.recording && styles.voiceConfirmOn]}
@@ -444,7 +446,7 @@ export default function AssistantScreen() {
               <>
                 <AppText style={styles.sheetTitle}>{assign.title}</AppText>
                 <AppText style={styles.sheetSub}>Who would you like to take care of this?</AppText>
-                <Pressable
+                <GradientButton tone="danger"
                   style={[styles.confirmBtn, !assign.hasFamily && { opacity: 0.5 }]}
                   disabled={!assign.hasFamily}
                   onPress={() => chooseAssignee("family")}
@@ -454,8 +456,8 @@ export default function AssistantScreen() {
                 >
                   <Ionicons name="people" size={22} color="#fff" />
                   <AppText style={styles.confirmBtnText}>  Ask my family</AppText>
-                </Pressable>
-                <Pressable
+                </GradientButton>
+                <GradientButton tone="danger"
                   style={[styles.confirmBtn, { backgroundColor: theme.colors.marigoldDark }]}
                   onPress={() => chooseAssignee("concierge")}
                   testID="assistant-assign-concierge"
@@ -464,7 +466,7 @@ export default function AssistantScreen() {
                 >
                   <Ionicons name="sparkles" size={22} color="#fff" />
                   <AppText style={styles.confirmBtnText}>  Let Sunshine do it</AppText>
-                </Pressable>
+                </GradientButton>
                 <Pressable style={styles.cancelBtn} onPress={() => setAssign(null)} testID="assistant-assign-cancel"
                   accessibilityRole="button" accessibilityLabel="Not now">
                   <AppText style={styles.cancelBtnText}>Not now</AppText>
@@ -489,10 +491,10 @@ export default function AssistantScreen() {
                 </View>
                 <AppText style={styles.sheetTitle}>Sent to {note.toName}</AppText>
                 <AppText style={styles.sheetSub}>They will hear it next time they open Sunshine.</AppText>
-                <Pressable style={styles.confirmBtn} onPress={() => setNote(null)} testID="note-done"
+                <GradientButton tone="danger" style={styles.confirmBtn} onPress={() => setNote(null)} testID="note-done"
                   accessibilityRole="button" accessibilityLabel="Done">
                   <AppText style={styles.confirmBtnText}>Done</AppText>
-                </Pressable>
+                </GradientButton>
               </>
             ) : (
               <>
@@ -510,17 +512,17 @@ export default function AssistantScreen() {
                 {note.stage === "sending" ? (
                   <ActivityIndicator size="large" color={theme.colors.brand} style={{ marginVertical: 16 }} />
                 ) : note.stage === "recording" ? (
-                  <Pressable style={styles.confirmBtn} onPress={noteSend} testID="note-send"
+                  <GradientButton tone="danger" style={styles.confirmBtn} onPress={noteSend} testID="note-send"
                     accessibilityRole="button" accessibilityLabel={`Send this voice note to ${note.toName}`}>
                     <Ionicons name="send" size={22} color="#fff" />
                     <AppText style={styles.confirmBtnText}>  Send to {note.toName}</AppText>
-                  </Pressable>
+                  </GradientButton>
                 ) : (
-                  <Pressable style={styles.confirmBtn} onPress={noteRecord} testID="note-record"
+                  <GradientButton tone="danger" style={styles.confirmBtn} onPress={noteRecord} testID="note-record"
                     accessibilityRole="button" accessibilityLabel="Start recording your voice note">
                     <Ionicons name="mic" size={22} color="#fff" />
                     <AppText style={styles.confirmBtnText}>  Record</AppText>
-                  </Pressable>
+                  </GradientButton>
                 )}
 
                 <Pressable style={styles.cancelBtn} onPress={noteCancel} testID="note-cancel"
@@ -547,7 +549,7 @@ export default function AssistantScreen() {
             </AppText>
             <AppText style={styles.sheetSub}>{sos.message}</AppText>
             {sos.emergency_number && (
-              <Pressable
+              <GradientButton tone="danger"
                 style={[styles.confirmBtn, { backgroundColor: theme.colors.error }]}
                 onPress={() => Linking.openURL(`tel:${sos.emergency_number}`).catch(() => {})}
                 testID="assistant-call-emergency"
@@ -556,7 +558,7 @@ export default function AssistantScreen() {
               >
                 <Ionicons name="call" size={22} color="#fff" />
                 <AppText style={styles.confirmBtnText}>  Call {sos.emergency_number} now</AppText>
-              </Pressable>
+              </GradientButton>
             )}
             <Pressable style={styles.cancelBtn} onPress={() => setSos(null)} testID="assistant-sos-close"
               accessibilityRole="button" accessibilityLabel="Close">
@@ -575,7 +577,7 @@ function Bubble({ msg, onAction, onInvite }: { msg: Msg; onAction: () => void; o
   return (
     <View>
       <View style={[styles.row, isUser ? styles.rowR : styles.rowL]}>
-        {!isUser && <View style={styles.av}><Ionicons name="sunny" size={16} color="#fff" /></View>}
+        {!isUser && <View style={styles.av}><GradientFill tone="logo" radius={15} /><Ionicons name="sunny" size={16} color="#fff" /></View>}
         <View style={[styles.bubble, isUser ? styles.bubbleU : styles.bubbleA]}>
           <AppText style={[styles.bubbleText, isUser && { color: "#fff" }]}>{msg.text}</AppText>
         </View>
@@ -589,7 +591,7 @@ function Bubble({ msg, onAction, onInvite }: { msg: Msg; onAction: () => void; o
       {a?.type === "call" && (
         <Pressable style={styles.actionCard} onPress={onAction} testID="assistant-call-action"
           accessibilityRole="button" accessibilityLabel={`Call ${a.target_name}`}>
-          <View style={styles.actionIcon}><Ionicons name="call" size={22} color="#fff" /></View>
+          <View style={styles.actionIcon}><GradientFill tone="brand" radius={21} /><Ionicons name="call" size={22} color="#fff" /></View>
           <AppText style={styles.actionText}>Call {a.target_name}</AppText>
           <Ionicons name="arrow-forward-circle" size={28} color={theme.colors.brand} />
         </Pressable>
