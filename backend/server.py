@@ -432,8 +432,10 @@ async def child_signup(b: ChildSignup):
     })
     if DEMO_MODE:
         try:
-            # Re-run so sample photos are attributed to the person who just joined.
+            # Re-run so sample photos are attributed to the person who just
+            # joined, and so they get a week of steps to compare against.
             await db.photos.delete_many({"elder_id": elder["id"], "demo": True})
+            await db.steps.delete_many({"elder_id": elder["id"], "demo": True})
             await _seed_demo(await db.users.find_one({"id": elder["id"]}, {"_id": 0}))
         except Exception:
             logger.exception("demo seeding failed for child %s", u["id"])
@@ -560,13 +562,20 @@ async def _seed_demo(elder: dict) -> dict:
             created["appointments"] += 1
 
     if not await db.steps.count_documents({"elder_id": eid}):
-        for i, n in enumerate(DEMO_STEPS):
-            d = (today - timedelta(days=len(DEMO_STEPS) - 1 - i)).strftime("%Y-%m-%d")
-            await db.steps.insert_one({
-                "elder_id": eid, "day": d, "steps": n, "source": "demo",
-                "updated_at": now.isoformat(), "demo": True,
-            })
-            created["steps"] += 1
+        # The elder, plus a livelier week for each family member so the
+        # side-by-side comparison has something in it.
+        walkers = [(eid, DEMO_STEPS)] + [
+            (c["id"], [int(n * 1.6) + (i * 130) for i, n in enumerate(DEMO_STEPS)])
+            for c in await _family_contacts(eid)
+        ]
+        for uid, counts in walkers:
+            for i, n in enumerate(counts):
+                d = (today - timedelta(days=len(counts) - 1 - i)).strftime("%Y-%m-%d")
+                await db.steps.insert_one({
+                    "user_id": uid, "elder_id": eid, "day": d, "steps": n, "source": "demo",
+                    "updated_at": now.isoformat(), "demo": True,
+                })
+                created["steps"] += 1
 
     if not await db.photos.count_documents({"elder_id": eid}):
         contacts = await _family_contacts(eid)
@@ -868,17 +877,24 @@ class StepsIn(BaseModel):
 
 
 @api.post("/health/steps")
-async def record_steps(b: StepsIn, u: dict = Depends(require_role("elder"))):
-    """Upsert a day's step count. Highest count for the day wins, since the
-    phone reports a running total that only grows."""
+async def record_steps(b: StepsIn, u: dict = Depends(current_user)):
+    """Upsert a day's step count for whoever is calling.
+
+    Both the elder and the family log their own steps, scoped to the same
+    family, so everyone can see how the others are doing. Highest count for the
+    day wins, since the phone reports a running total that only grows.
+    """
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No family account linked")
     day = (b.day or elder_day(u)).strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         raise HTTPException(422, "Day must look like 2026-08-17")
-    existing = await db.steps.find_one({"elder_id": u["id"], "day": day})
+    existing = await db.steps.find_one({"user_id": u["id"], "day": day})
     steps = max(b.steps, (existing or {}).get("steps", 0))
     await db.steps.update_one(
-        {"elder_id": u["id"], "day": day},
-        {"$set": {"elder_id": u["id"], "day": day, "steps": steps,
+        {"user_id": u["id"], "day": day},
+        {"$set": {"user_id": u["id"], "elder_id": eid, "day": day, "steps": steps,
                   "source": b.source or "pedometer",
                   "updated_at": datetime.now(timezone.utc).isoformat()}},
         upsert=True,
@@ -886,13 +902,21 @@ async def record_steps(b: StepsIn, u: dict = Depends(require_role("elder"))):
     return {"day": day, "steps": steps}
 
 
-async def _step_week(elder: dict, days: int = 7) -> dict:
+async def _step_week(elder: dict, days: int = 7, user_id: Optional[str] = None) -> dict:
     """The last N days ending today, in the elder's own zone. Missing days are
     reported as zero rather than skipped, so the week always has seven bars."""
     today = elder_now(elder).date()
     wanted = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
-    rows = await db.steps.find({"elder_id": elder["id"], "day": {"$in": wanted}}, {"_id": 0}).to_list(days)
-    by_day = {r["day"]: r["steps"] for r in rows}
+    who = user_id or elder["id"]
+    # Rows written before steps were per-person carry no user_id; treat those as
+    # the elder's so existing history isn't lost.
+    q = {"day": {"$in": wanted}, "$or": [{"user_id": who}]}
+    if who == elder["id"]:
+        q["$or"].append({"elder_id": elder["id"], "user_id": {"$exists": False}})
+    rows = await db.steps.find(q, {"_id": 0}).to_list(days * 2)
+    by_day: dict = {}
+    for r in rows:
+        by_day[r["day"]] = max(by_day.get(r["day"], 0), r["steps"])
     series = [{"day": d, "steps": by_day.get(d, 0)} for d in wanted]
     counted = [s["steps"] for s in series if s["steps"] > 0]
     best = max(series, key=lambda s: s["steps"]) if counted else None
@@ -911,11 +935,55 @@ async def _step_week(elder: dict, days: int = 7) -> dict:
 
 @api.get("/health/steps")
 async def get_steps(days: int = 7, u: dict = Depends(current_user)):
+    """The caller's own week."""
     eid = await elder_id_for(u)
     elder = await db.users.find_one({"id": eid}, {"_id": 0})
     if not elder:
         raise HTTPException(404, "Account not found")
-    return await _step_week(elder, max(1, min(days, 31)))
+    return await _step_week(elder, max(1, min(days, 31)), user_id=u["id"])
+
+
+@api.get("/health/steps/family")
+async def get_family_steps(days: int = 7, u: dict = Depends(current_user)):
+    """Everyone in the family, side by side — today and the week so far.
+
+    Ordered by today's count so it reads as a gentle nudge rather than a
+    league table nobody wanted.
+    """
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    if not elder:
+        raise HTTPException(404, "Account not found")
+    span = max(1, min(days, 31))
+
+    people = [{"id": elder["id"], "name": elder.get("name"), "relation": "You" if u["id"] == elder["id"] else "Parent"}]
+    for c in await _family_contacts(eid):
+        people.append({"id": c["id"], "name": c["name"],
+                       "relation": "You" if c["id"] == u["id"] else c["relation"]})
+
+    members = []
+    for person in people:
+        week = await _step_week(elder, span, user_id=person["id"])
+        members.append({
+            **person,
+            "is_me": person["id"] == u["id"],
+            "today": week["today"],
+            "total": week["total"],
+            "average": week["average"],
+            "days_active": week["days_active"],
+            "goal_days": week["goal_days"],
+            "series": week["series"],
+        })
+
+    members.sort(key=lambda m: m["today"], reverse=True)
+    walking = [m for m in members if m["today"] > 0]
+    return {
+        "goal": (elder or {}).get("step_goal") or STEP_GOAL_DEFAULT,
+        "members": members,
+        "family_total_today": sum(m["today"] for m in members),
+        "family_total_week": sum(m["total"] for m in members),
+        "leader": walking[0]["name"] if walking else None,
+    }
 
 
 class OCRIn(BaseModel):

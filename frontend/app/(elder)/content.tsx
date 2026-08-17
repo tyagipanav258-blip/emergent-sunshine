@@ -104,7 +104,7 @@ function ReelItem({ reel, active, height, liked, onLike }: { reel: Reel; active:
       >
         {!playing && <View style={styles.playWrap}><View style={styles.play}><Ionicons name="play" size={44} color="#fff" /></View></View>}
       </Pressable>
-      <View style={[styles.rail, { bottom: insets.bottom + 24 }]}>
+      <View style={[styles.rail, { bottom: insets.bottom + theme.fabClearance }]}>
         <Pressable
           style={styles.railBtn}
           onPress={onLike}

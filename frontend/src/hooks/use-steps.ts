@@ -5,6 +5,17 @@ import { apiFetch } from "@/src/api";
 
 export type StepDay = { day: string; steps: number };
 
+export type FamilySteps = {
+  goal: number;
+  members: {
+    id: string; name: string; relation: string; is_me: boolean;
+    today: number; total: number; average: number; days_active: number; goal_days: number;
+  }[];
+  family_total_today: number;
+  family_total_week: number;
+  leader: string | null;
+};
+
 export type StepWeek = {
   today: number;
   goal: number;
@@ -39,6 +50,7 @@ function startOfToday(): Date {
 export function useSteps() {
   const [today, setToday] = useState(0);
   const [week, setWeek] = useState<StepWeek | null>(null);
+  const [family, setFamily] = useState<FamilySteps | null>(null);
   const [available, setAvailable] = useState<boolean | null>(null);
   const [denied, setDenied] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -46,6 +58,8 @@ export function useSteps() {
   const baseline = useRef(0);
 
   const loadWeek = useCallback(async () => {
+    // The family panel is secondary, so it never blocks the user's own count.
+    apiFetch<FamilySteps>("/health/steps/family?days=7").then(setFamily).catch(() => {});
     try {
       const w = await apiFetch<StepWeek>("/health/steps?days=7");
       setWeek(w);
@@ -139,5 +153,5 @@ export function useSteps() {
     await loadWeek();
   }, [today, sync, loadWeek]);
 
-  return { today, week, available, denied, loading, refresh };
+  return { today, week, family, available, denied, loading, refresh };
 }

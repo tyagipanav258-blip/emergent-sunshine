@@ -9,6 +9,7 @@ import { apiFetch, logActivity } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useNotifications } from "@/src/hooks/use-notifications";
 import { LogoMark } from "@/src/components/Logo";
+import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 type News = { id: string; title: string; summary: string; source: string; image: string };
@@ -16,6 +17,7 @@ type FamilyMember = { id: string; name: string; relation: string };
 
 export default function ElderHome() {
   const insets = useSafeAreaInsets();
+  const { onScroll } = useScrollChrome();
   const router = useRouter();
   const { user } = useAuth();
   const { unread } = useNotifications();
@@ -88,7 +90,9 @@ export default function ElderHome() {
         <FlatList
           data={news}
           keyExtractor={(i) => i.id}
-          contentContainerStyle={{ paddingBottom: 24 }}
+          contentContainerStyle={{ paddingBottom: theme.fabClearance }}
+          onScroll={onScroll}
+          scrollEventThrottle={32}
           showsVerticalScrollIndicator={false}
           onEndReached={loadMore}
           onEndReachedThreshold={0.6}

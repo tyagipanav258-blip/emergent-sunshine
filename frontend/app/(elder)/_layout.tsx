@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "@/src/api";
+import { ScrollChromeProvider, useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 type IconName = React.ComponentProps<typeof Ionicons>["name"];
@@ -32,9 +33,18 @@ type SosState =
   | { stage: "done"; result: SosResult };
 
 export default function ElderLayout() {
+  return (
+    <ScrollChromeProvider>
+      <ElderTabs />
+    </ScrollChromeProvider>
+  );
+}
+
+function ElderTabs() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [sos, setSos] = useState<SosState>({ stage: "closed" });
+  const { chromeVisible } = useScrollChrome();
 
   const askSos = () => {
     if (Platform.OS !== "web") Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -73,34 +83,6 @@ export default function ElderLayout() {
           // The assistant and SOS live in reserved chrome rather than floating
           // over the screen, so they can never cover a medicine or a status.
           <View style={[styles.chrome, { paddingBottom: tabBarBottom }]} testID="elder-tabbar">
-            <View style={styles.actionRow}>
-              <GradientButton tone="brand"
-                style={styles.assistantBtn}
-                onPress={() => {
-                  if (Platform.OS !== "web") Haptics.selectionAsync();
-                  router.push("/assistant");
-                }}
-                testID="floating-assistant"
-                accessibilityRole="button"
-                accessibilityLabel="Talk to Sunshine"
-                accessibilityHint="Opens the assistant so you can ask for help by voice or typing"
-              >
-                <Ionicons name="mic" size={24} color="#fff" />
-                <AppText style={styles.assistantText}>Ask Sunshine</AppText>
-              </GradientButton>
-              <GradientButton tone="danger"
-                style={styles.sosBtn}
-                onPress={askSos}
-                testID="floating-sos"
-                accessibilityRole="button"
-                accessibilityLabel="Emergency SOS"
-                accessibilityHint="Asks you to confirm before alerting your family"
-              >
-                <Ionicons name="alert" size={24} color="#fff" />
-                <AppText style={styles.sosBtnText}>SOS</AppText>
-              </GradientButton>
-            </View>
-
             <View style={styles.bar}>
               {TABS.map((tab, index) => {
                 const focused = state.index === index;
@@ -134,6 +116,41 @@ export default function ElderLayout() {
         <Tabs.Screen name="content" />
         <Tabs.Screen name="profile" />
       </Tabs>
+
+      {/* Both controls float in the bottom corners rather than occupying a
+          fixed strip. Every scrolling screen reserves theme.fabClearance at the
+          foot, so content can always scroll clear of them — floating without
+          permanently covering anything. */}
+      <GradientButton
+        tone="brand"
+        style={[styles.fab, styles.fabLeft, { bottom: tabBarBottom + 74, opacity: chromeVisible ? 1 : 0 }]}
+        pointerEvents={chromeVisible ? "auto" : "none"}
+        onPress={() => {
+          if (Platform.OS !== "web") Haptics.selectionAsync();
+          router.push("/assistant");
+        }}
+        testID="floating-assistant"
+        accessibilityRole="button"
+        accessibilityLabel="Talk to Sunshine"
+        accessibilityHint="Opens the assistant so you can ask for help by voice or typing"
+      >
+        <Ionicons name="mic" size={26} color="#fff" />
+        <AppText style={styles.fabLabel}>Ask</AppText>
+      </GradientButton>
+
+      <GradientButton
+        tone="danger"
+        style={[styles.fab, styles.fabRight, { bottom: tabBarBottom + 74, opacity: chromeVisible ? 1 : 0 }]}
+        pointerEvents={chromeVisible ? "auto" : "none"}
+        onPress={askSos}
+        testID="floating-sos"
+        accessibilityRole="button"
+        accessibilityLabel="Emergency SOS"
+        accessibilityHint="Asks you to confirm before alerting your family"
+      >
+        <Ionicons name="alert" size={26} color="#fff" />
+        <AppText style={styles.fabLabel}>SOS</AppText>
+      </GradientButton>
 
       {sos.stage !== "closed" && (
         <View style={styles.backdrop} testID="sos-sheet">
@@ -239,25 +256,17 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
   },
-  actionRow: {
-    flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
+  fab: {
+    position: "absolute",
+    width: 68, height: 68, borderRadius: 34,
+    alignItems: "center", justifyContent: "center", gap: 0,
+    shadowColor: "#000", shadowOpacity: 0.28, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 }, elevation: 8,
   },
-  assistantBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: theme.colors.brand, borderRadius: theme.radius.pill, paddingVertical: 14, minHeight: 56,
-  },
-  assistantText: { color: "#fff", fontSize: theme.font.base, fontWeight: "800" },
-  sosBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    backgroundColor: theme.colors.error, borderRadius: theme.radius.pill,
-    paddingVertical: 14, paddingHorizontal: 26, minHeight: 56,
-  },
-  sosBtnText: { color: "#fff", fontSize: theme.font.base, fontWeight: "800" },
-  bar: { flexDirection: "row", paddingTop: 8, paddingHorizontal: 6 },
+  fabLeft: { left: 16 },
+  fabRight: { right: 16 },
+  fabLabel: { color: "#fff", fontSize: 11, fontWeight: "800", marginTop: -1, letterSpacing: 0.2 },
+  bar: { flexDirection: "row", paddingTop: 10, paddingHorizontal: 6 },
   item: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3, minHeight: 56 },
   label: { fontSize: theme.font.xs },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },

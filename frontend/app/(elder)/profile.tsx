@@ -10,6 +10,7 @@ import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useTextScale } from "@/src/text-scale";
+import { useScrollChrome } from "@/src/scroll-context";
 import { theme, TEXT_SCALES, TextScaleKey } from "@/src/theme";
 
 type FamilyMember = { id: string; name: string; relation: string };
@@ -32,6 +33,7 @@ const STATUS_META: Record<string, { label: string; color: string; icon: any }> =
 
 export default function ElderProfile() {
   const insets = useSafeAreaInsets();
+  const { onScroll } = useScrollChrome();
   const router = useRouter();
   const { user, signOut } = useAuth();
   const { key: textScaleKey, setScale } = useTextScale();
@@ -90,57 +92,15 @@ export default function ElderProfile() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="elder-profile">
-      <ScrollView contentContainerStyle={{ paddingBottom: 200 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: theme.fabClearance }}
+          onScroll={onScroll}
+          scrollEventThrottle={32} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <View style={styles.avatar} accessible accessibilityLabel={`Profile picture for ${user?.name || "you"}`}>
             <Ionicons name="person" size={48} color={theme.colors.brand} />
           </View>
           <AppText style={styles.name}>{user?.name}</AppText>
           {user?.location ? <AppText style={styles.sub}>{user.location}</AppText> : null}
-        </View>
-
-        {/* Family code */}
-        <View style={styles.codeCard} testID="family-code-card">
-          <View style={styles.codeTop}>
-            <View style={{ flex: 1 }}>
-              <AppText style={styles.codeLabel}>Your family code</AppText>
-              <AppText
-                style={styles.codeValue}
-                accessibilityLabel={`Your family code is ${user?.family_code?.split("").join(" ")}`}
-              >
-                {user?.family_code}
-              </AppText>
-            </View>
-            <Ionicons name="people-circle" size={44} color={theme.colors.brand} />
-          </View>
-          <AppText style={styles.codeHint}>
-            {family.length > 0
-              ? `${family.map((f) => f.name).join(", ")} ${family.length === 1 ? "is" : "are"} connected. Share the code to add someone else.`
-              : "Nobody is connected yet. Send this to your son or daughter so they can look after you."}
-          </AppText>
-          <View style={styles.codeBtns}>
-            <GradientButton tone="brand"
-              style={styles.shareBtn}
-              onPress={shareCode}
-              testID="share-family-code"
-              accessibilityRole="button"
-              accessibilityLabel="Share your family code"
-              accessibilityHint="Opens your phone's share options so you can send an invite"
-            >
-              <Ionicons name="share-social" size={22} color="#fff" />
-              <AppText style={styles.shareBtnText}>Invite family</AppText>
-            </GradientButton>
-            <Pressable
-              style={styles.copyBtn}
-              onPress={copyCode}
-              testID="copy-family-code"
-              accessibilityRole="button"
-              accessibilityLabel={copied ? "Family code copied" : "Copy your family code"}
-            >
-              <Ionicons name={copied ? "checkmark" : "copy-outline"} size={20} color={theme.colors.brand} />
-              <AppText style={styles.copyBtnText}>{copied ? "Copied" : "Copy"}</AppText>
-            </Pressable>
-          </View>
         </View>
 
         {/* I'm Okay */}
@@ -242,6 +202,50 @@ export default function ElderProfile() {
                 </Pressable>
               );
             })}
+          </View>
+        </View>
+
+        {/* Family code lives at the foot — it matters once, when inviting. */}
+        <View style={styles.codeCard} testID="family-code-card">
+          <View style={styles.codeTop}>
+            <View style={{ flex: 1 }}>
+              <AppText style={styles.codeLabel}>Your family code</AppText>
+              <AppText
+                style={styles.codeValue}
+                accessibilityLabel={`Your family code is ${user?.family_code?.split("").join(" ")}`}
+              >
+                {user?.family_code}
+              </AppText>
+            </View>
+            <Ionicons name="people-circle" size={44} color={theme.colors.brand} />
+          </View>
+          <AppText style={styles.codeHint}>
+            {family.length > 0
+              ? `${family.map((f) => f.name).join(", ")} ${family.length === 1 ? "is" : "are"} connected. Share the code to add someone else.`
+              : "Nobody is connected yet. Send this to your son or daughter so they can look after you."}
+          </AppText>
+          <View style={styles.codeBtns}>
+            <GradientButton tone="brand"
+              style={styles.shareBtn}
+              onPress={shareCode}
+              testID="share-family-code"
+              accessibilityRole="button"
+              accessibilityLabel="Share your family code"
+              accessibilityHint="Opens your phone's share options so you can send an invite"
+            >
+              <Ionicons name="share-social" size={22} color="#fff" />
+              <AppText style={styles.shareBtnText}>Invite family</AppText>
+            </GradientButton>
+            <Pressable
+              style={styles.copyBtn}
+              onPress={copyCode}
+              testID="copy-family-code"
+              accessibilityRole="button"
+              accessibilityLabel={copied ? "Family code copied" : "Copy your family code"}
+            >
+              <Ionicons name={copied ? "checkmark" : "copy-outline"} size={20} color={theme.colors.brand} />
+              <AppText style={styles.copyBtnText}>{copied ? "Copied" : "Copy"}</AppText>
+            </Pressable>
           </View>
         </View>
 

@@ -10,6 +10,7 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiFetch, logActivity } from "@/src/api";
 import { useSteps } from "@/src/hooks/use-steps";
+import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 type Med = { id: string; name: string; dose: string; time: string; type: string; stock: number; per_day: number; taken_today: boolean; image: string; days_left: number; low: boolean };
@@ -30,6 +31,7 @@ type Explainer = {
 
 export default function ElderHealth() {
   const insets = useSafeAreaInsets();
+  const { onScroll, setChromeSuppressed } = useScrollChrome();
   const [meds, setMeds] = useState<Med[]>([]);
   const [appts, setAppts] = useState<Appt[]>([]);
   const [missed, setMissed] = useState<any[]>([]);
@@ -59,6 +61,11 @@ export default function ElderHealth() {
   }, []);
 
   useEffect(() => { logActivity("Health"); load(); }, [load]);
+
+  // Hide the floating buttons whenever a sheet is open, so they never sit on
+  // top of its controls.
+  const anySheetOpen = Boolean(ocr.open || concierge.open || undo || remove || explain || stepsOpen || assign);
+  useEffect(() => { setChromeSuppressed(anySheetOpen); }, [anySheetOpen, setChromeSuppressed]);
 
   const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(""), 2500); };
 
@@ -181,7 +188,9 @@ export default function ElderHealth() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="elder-health">
-      <ScrollView contentContainerStyle={{ paddingBottom: 32 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: theme.fabClearance }}
+          onScroll={onScroll}
+          scrollEventThrottle={32} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <AppText style={styles.greeting}>{greeting}, {name}</AppText>
           <AppText style={styles.sub}>Here&apos;s what you need today.</AppText>
@@ -248,10 +257,16 @@ export default function ElderHealth() {
 
         {/* Intake prompt */}
         {nextDue ? (
-          <View style={styles.intake} testID="intake-prompt"><GradientFill tone="sunriseSoft" radius={28} />
-            <Image source={{ uri: nextDue.image }} style={styles.intakeImg} />
-            <AppText style={styles.intakeQ}>Did you take your {nextDue.name}?</AppText>
-            <AppText style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</AppText>
+          <View style={styles.intake} testID="intake-prompt"><GradientFill tone="sunriseSoft" radius={24} />
+            {/* Image beside the question rather than stacked above it — the
+                stacked version left a band of empty card doing nothing. */}
+            <View style={styles.intakeTop}>
+              <Image source={{ uri: nextDue.image }} style={styles.intakeImg} />
+              <View style={{ flex: 1 }}>
+                <AppText style={styles.intakeQ}>Did you take your {nextDue.name}?</AppText>
+                <AppText style={styles.intakeMeta}>{nextDue.dose} • due {nextDue.time}</AppText>
+              </View>
+            </View>
             <View style={styles.intakeBtns}>
               <Pressable
                 style={[styles.intakeBtn, styles.intakeYes]}
@@ -275,8 +290,8 @@ export default function ElderHealth() {
             </View>
           </View>
         ) : meds.length === 0 ? (
-          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-empty"><GradientFill tone="sunriseSoft" radius={28} />
-            <Ionicons name="camera" size={54} color={theme.colors.marigoldDark} />
+          <View style={[styles.intake, styles.intakeCentred]} testID="intake-empty"><GradientFill tone="sunriseSoft" radius={24} />
+            <Ionicons name="camera" size={40} color={theme.colors.marigoldDark} />
             <AppText style={styles.intakeQ}>Let&apos;s add your medicines</AppText>
             <AppText style={styles.intakeMeta}>
               Take a photo of your prescription and we&apos;ll add them for you.
@@ -293,8 +308,8 @@ export default function ElderHealth() {
             </Pressable>
           </View>
         ) : (
-          <View style={[styles.intake, { alignItems: "center" }]} testID="intake-done"><GradientFill tone="sunriseSoft" radius={28} />
-            <Ionicons name="checkmark-done-circle" size={54} color={theme.colors.success} />
+          <View style={[styles.intake, styles.intakeCentred]} testID="intake-done"><GradientFill tone="sunriseSoft" radius={24} />
+            <Ionicons name="checkmark-done-circle" size={40} color={theme.colors.success} />
             <AppText style={styles.intakeQ}>All medicines taken today</AppText>
             <AppText style={styles.intakeMeta}>Wonderful! Keep it up.</AppText>
           </View>
@@ -676,6 +691,43 @@ export default function ElderHealth() {
                     ? `Your best day was ${DAY_LABELS[new Date(steps.week.best_day.day + "T00:00:00").getDay()]}, with ${steps.week.best_day.steps.toLocaleString()} steps. That's ${steps.week.total.toLocaleString()} steps across the week.`
                     : `${steps.week.total.toLocaleString()} steps across the week.`}
                 </AppText>
+
+                {/* Everyone side by side. Ordered by today's count, framed as
+                    encouragement rather than a league table. */}
+                {steps.family && steps.family.members.length > 1 && (
+                  <View style={styles.familySteps} testID="family-steps">
+                    <AppText style={styles.familyTitle}>Your family today</AppText>
+                    {steps.family.members.map((m) => {
+                      const top = steps.family!.members[0].today || 1;
+                      return (
+                        <View key={m.id} style={styles.walkerRow} testID={`walker-${m.id}`}
+                          accessibilityRole="text"
+                          accessibilityLabel={`${m.is_me ? "You" : m.name}, ${m.today.toLocaleString()} steps today`}>
+                          <View style={{ flex: 1, gap: 4 }}>
+                            <View style={styles.walkerTop}>
+                              <AppText style={[styles.walkerName, m.is_me && styles.walkerMe]} numberOfLines={1}>
+                                {m.is_me ? "You" : m.name.split(" ")[0]}
+                              </AppText>
+                              <AppText style={styles.walkerCount}>{m.today.toLocaleString()}</AppText>
+                            </View>
+                            <View style={styles.walkerTrack}>
+                              <View style={[
+                                styles.walkerFill,
+                                { width: `${Math.max(Math.round((m.today / top) * 100), m.today > 0 ? 6 : 0)}%` },
+                                m.today >= steps.family!.goal && { backgroundColor: theme.colors.success },
+                              ]} />
+                            </View>
+                          </View>
+                        </View>
+                      );
+                    })}
+                    <AppText style={styles.familyFoot}>
+                      {steps.family.leader
+                        ? `${steps.family.members[0].is_me ? "You're" : steps.family.leader + " is"} ahead today — ${steps.family.family_total_today.toLocaleString()} steps between you.`
+                        : "Nobody has walked yet today."}
+                    </AppText>
+                  </View>
+                )}
               </>
             )}
 
@@ -769,17 +821,19 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 12 },
   greeting: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface },
   sub: { fontSize: 17, color: theme.colors.muted, marginTop: 4 },
-  intake: { marginHorizontal: 20, borderRadius: 28, overflow: "hidden", padding: 24, alignItems: "center", gap: 6, borderWidth: 2, borderColor: theme.colors.marigold },
+  intake: { marginHorizontal: 20, borderRadius: 24, overflow: "hidden", padding: 16, gap: 12, borderWidth: 2, borderColor: theme.colors.marigold },
+  intakeCentred: { alignItems: "center", gap: 6, paddingVertical: 20 },
+  intakeTop: { flexDirection: "row", alignItems: "center", gap: 14 },
   missedBanner: { flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 20, marginBottom: 14, backgroundColor: theme.colors.error + "16", borderRadius: 20, padding: 16, borderWidth: 1.5, borderColor: theme.colors.error + "55" },
   missedTitle: { fontSize: 17, fontWeight: "800", color: theme.colors.error },
   missedSub: { fontSize: 14, color: theme.colors.onSurfaceSecondary, marginTop: 2, lineHeight: 19 },
   savedRow: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: theme.colors.brandLight, borderRadius: 12, padding: 10 },
   savedText: { fontSize: 14, fontWeight: "700", color: theme.colors.success, flex: 1 },
-  intakeImg: { width: 64, height: 64, borderRadius: 16, marginBottom: 4 },
-  intakeQ: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
-  intakeMeta: { fontSize: 16, color: theme.colors.onSurfaceSecondary },
-  intakeBtns: { flexDirection: "row", gap: 12, marginTop: 14, alignSelf: "stretch" },
-  intakeBtn: { flex: 1, borderRadius: 999, paddingVertical: 18, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
+  intakeImg: { width: 48, height: 48, borderRadius: 12 },
+  intakeQ: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface, lineHeight: 25 },
+  intakeMeta: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
+  intakeBtns: { flexDirection: "row", gap: 10, alignSelf: "stretch" },
+  intakeBtn: { flex: 1, borderRadius: 999, paddingVertical: 14, minHeight: 56, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8 },
   intakeYes: { backgroundColor: theme.colors.success },
   intakeYesText: { color: "#fff", fontSize: 18, fontWeight: "800" },
   intakeNot: { backgroundColor: theme.colors.surface, borderWidth: 2, borderColor: theme.colors.borderStrong },
@@ -819,6 +873,20 @@ const styles = StyleSheet.create({
   },
   stepStatValue: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
   stepStatLabel: { fontSize: theme.font.xs, color: theme.colors.muted, textAlign: "center" },
+  familySteps: {
+    alignSelf: "stretch", backgroundColor: theme.colors.surfaceSecondary,
+    borderRadius: theme.radius.lg, padding: 16, gap: 12, marginTop: 4,
+    borderWidth: 1, borderColor: theme.colors.border,
+  },
+  familyTitle: { fontSize: theme.font.base, fontWeight: "800", color: theme.colors.onSurface },
+  walkerRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  walkerTop: { flexDirection: "row", alignItems: "baseline", justifyContent: "space-between", gap: 10 },
+  walkerName: { fontSize: theme.font.sm, fontWeight: "700", color: theme.colors.onSurfaceSecondary, flex: 1 },
+  walkerMe: { color: theme.colors.brand, fontWeight: "800" },
+  walkerCount: { fontSize: theme.font.sm, fontWeight: "800", color: theme.colors.onSurface, fontVariant: ["tabular-nums"] },
+  walkerTrack: { height: 10, borderRadius: 5, backgroundColor: theme.colors.surfaceTertiary, overflow: "hidden" },
+  walkerFill: { height: "100%", borderRadius: 5, backgroundColor: theme.colors.brand },
+  familyFoot: { fontSize: theme.font.xs, color: theme.colors.muted, lineHeight: 18 },
   choiceCard: {
     alignSelf: "stretch", flexDirection: "row", alignItems: "center", gap: 14,
     backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg, padding: 16,
