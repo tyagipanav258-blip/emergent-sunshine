@@ -7,12 +7,24 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiFetch, logActivity } from "@/src/api";
+import { useSteps } from "@/src/hooks/use-steps";
 import { theme } from "@/src/theme";
 
 type Med = { id: string; name: string; dose: string; time: string; type: string; stock: number; per_day: number; taken_today: boolean; image: string; days_left: number; low: boolean };
 type Appt = { id: string; doctor: string; specialty: string; date: string; time: string; place: string };
 
 const TYPE_ICON: Record<string, any> = { tablet: "ellipse", capsule: "medical", syrup: "flask", drops: "water" };
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+type Explainer = {
+  name: string;
+  what_for: string;
+  how_to_take: string;
+  watch_for: string;
+  unknown: boolean;
+  disclaimer: string;
+};
 
 export default function ElderHealth() {
   const insets = useSafeAreaInsets();
@@ -26,6 +38,11 @@ export default function ElderHealth() {
   const [concierge, setConcierge] = useState<{ open: boolean; text: string; busy?: boolean; done?: string }>({ open: false, text: "" });
   const [toast, setToast] = useState("");
   const [undo, setUndo] = useState<Med | null>(null);
+  const [remove, setRemove] = useState<Med | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [explain, setExplain] = useState<{ med: Med; busy: boolean; data?: Explainer; error?: string } | null>(null);
+  const [stepsOpen, setStepsOpen] = useState(false);
+  const steps = useSteps();
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +75,32 @@ export default function ElderHealth() {
   const onMedPress = (m: Med) => {
     if (m.taken_today) setUndo(m);
     else setMedTaken(m.id, true);
+  };
+
+  const deleteMed = async () => {
+    if (!remove) return;
+    setRemoving(true);
+    try {
+      const r = await apiFetch<any>(`/health/medicines/${remove.id}`, { method: "DELETE" });
+      setMeds((prev) => prev.filter((m) => m.id !== remove.id));
+      showToast(r.message || `${remove.name} removed`);
+    } catch {
+      showToast("Could not remove it. Please try again.");
+    }
+    setRemoving(false);
+    setRemove(null);
+    load();
+  };
+
+  const explainMed = async (m: Med) => {
+    if (Platform.OS !== "web") Haptics.selectionAsync();
+    setExplain({ med: m, busy: true });
+    try {
+      const d = await apiFetch<Explainer>(`/health/medicines/${m.id}/explain`, { method: "POST" });
+      setExplain({ med: m, busy: false, data: d });
+    } catch {
+      setExplain({ med: m, busy: false, error: "We could not look that up just now. Please try again." });
+    }
   };
 
   const nextDue = meds.find((m) => !m.taken_today);
@@ -118,6 +161,57 @@ export default function ElderHealth() {
           <AppText style={styles.greeting}>{greeting}, {name}</AppText>
           <AppText style={styles.sub}>Here&apos;s what you need today.</AppText>
         </View>
+
+        {/* Today's walking */}
+        <Pressable
+          style={styles.stepsCard}
+          onPress={() => { if (Platform.OS !== "web") Haptics.selectionAsync(); steps.refresh(); setStepsOpen(true); }}
+          testID="steps-card"
+          accessibilityRole="button"
+          accessibilityLabel={
+            steps.available === false
+              ? "Step counting is not available on this device"
+              : `${steps.today} steps today. Open your weekly walking summary.`
+          }
+        >
+          <View style={styles.stepsIcon}><Ionicons name="walk" size={30} color={theme.colors.brand} /></View>
+          <View style={{ flex: 1 }}>
+            {steps.available === false ? (
+              <>
+                <AppText style={styles.stepsLabel}>Steps today</AppText>
+                <AppText style={styles.stepsUnavailable}>
+                  This device can&apos;t count steps. Your weekly history still shows here.
+                </AppText>
+              </>
+            ) : steps.denied ? (
+              <>
+                <AppText style={styles.stepsLabel}>Steps today</AppText>
+                <AppText style={styles.stepsUnavailable}>
+                  Allow motion access to count your steps.
+                </AppText>
+              </>
+            ) : (
+              <>
+                <AppText style={styles.stepsLabel}>Steps today</AppText>
+                <AppText style={styles.stepsValue}>{steps.today.toLocaleString()}</AppText>
+                <View style={styles.stepsBarTrack}>
+                  <View
+                    style={[
+                      styles.stepsBarFill,
+                      { width: `${Math.min(100, Math.round((steps.today / (steps.week?.goal || 3000)) * 100))}%` },
+                    ]}
+                  />
+                </View>
+                <AppText style={styles.stepsGoal}>
+                  {steps.today >= (steps.week?.goal || 3000)
+                    ? "You reached your goal today. Wonderful!"
+                    : `${Math.max((steps.week?.goal || 3000) - steps.today, 0).toLocaleString()} more to reach your goal`}
+                </AppText>
+              </>
+            )}
+          </View>
+          <Ionicons name="chevron-forward" size={24} color={theme.colors.brand} />
+        </Pressable>
 
         {/* Missed dose reminder */}
         {missed.length > 0 && (
@@ -224,6 +318,30 @@ export default function ElderHealth() {
               </View>
               <View style={[styles.check, m.taken_today && styles.checkOn]}>
                 {m.taken_today && <Ionicons name="checkmark" size={22} color="#fff" />}
+              </View>
+
+              {/* Row actions sit outside the confirm target so neither is a mis-tap for the other. */}
+              <View style={styles.medActions}>
+                <Pressable
+                  style={styles.medAction}
+                  onPress={() => explainMed(m)}
+                  hitSlop={6}
+                  testID={`explain-${m.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`What is ${m.name} for?`}
+                >
+                  <Ionicons name="help-circle-outline" size={26} color={theme.colors.brand} />
+                </Pressable>
+                <Pressable
+                  style={styles.medAction}
+                  onPress={() => { if (Platform.OS !== "web") Haptics.selectionAsync(); setRemove(m); }}
+                  hitSlop={6}
+                  testID={`remove-${m.id}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${m.name} from my medicines`}
+                >
+                  <Ionicons name="trash-outline" size={24} color={theme.colors.error} />
+                </Pressable>
               </View>
             </Pressable>
           ))}
@@ -342,6 +460,131 @@ export default function ElderHealth() {
         </View>
       )}
 
+      {/* Removing a medicine asks first and says what else it will withdraw. */}
+      {remove && (
+        <View style={styles.backdrop} testID="remove-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => !removing && setRemove(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <View style={styles.removeIcon}><Ionicons name="trash" size={36} color="#fff" /></View>
+            <AppText style={styles.sheetTitle}>Remove {remove.name}?</AppText>
+            <AppText style={styles.sheetSub}>
+              It will disappear from your list, along with its reminders and its record of the doses you took.
+            </AppText>
+            {removing ? (
+              <ActivityIndicator size="large" color={theme.colors.error} style={{ marginVertical: 16 }} />
+            ) : (
+              <>
+                <Pressable style={styles.dangerBtn} onPress={deleteMed} testID="remove-confirm"
+                  accessibilityRole="button" accessibilityLabel={`Yes, remove ${remove.name}`}>
+                  <AppText style={styles.dangerBtnText}>Yes, remove it</AppText>
+                </Pressable>
+                <Pressable style={styles.secondaryBtn} onPress={() => setRemove(null)} testID="remove-cancel"
+                  accessibilityRole="button" accessibilityLabel="Keep this medicine">
+                  <AppText style={styles.secondaryBtnText}>Keep it</AppText>
+                </Pressable>
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Plain-language explanation of what a medicine is for. */}
+      {explain && (
+        <View style={styles.backdrop} testID="explain-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setExplain(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <AppText style={styles.sheetTitle}>{explain.med.name}</AppText>
+            {explain.busy ? (
+              <View style={{ alignItems: "center", gap: 12, paddingVertical: 20 }}>
+                <ActivityIndicator size="large" color={theme.colors.brand} />
+                <AppText style={styles.sheetSub}>Looking this up for you...</AppText>
+              </View>
+            ) : explain.error ? (
+              <AppText style={styles.sheetSub}>{explain.error}</AppText>
+            ) : explain.data?.unknown ? (
+              <AppText style={styles.sheetSub}>
+                We don&apos;t recognise this one. Your doctor or pharmacist can tell you what it&apos;s for.
+              </AppText>
+            ) : (
+              <View style={{ alignSelf: "stretch", gap: 14 }}>
+                <ExplainRow icon="information-circle" title="What it's for" body={explain.data?.what_for} />
+                <ExplainRow icon="time" title="How to take it" body={explain.data?.how_to_take} />
+                <ExplainRow icon="alert-circle" title="Tell your doctor if" body={explain.data?.watch_for} />
+                <AppText style={styles.disclaimer}>{explain.data?.disclaimer}</AppText>
+              </View>
+            )}
+            <Pressable style={styles.primaryBtn} onPress={() => setExplain(null)} testID="explain-close"
+              accessibilityRole="button" accessibilityLabel="Close">
+              <AppText style={styles.primaryBtnText}>Close</AppText>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {/* Weekly walking */}
+      {stepsOpen && (
+        <View style={styles.backdrop} testID="steps-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setStepsOpen(false)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <AppText style={styles.sheetTitle}>Your week of walking</AppText>
+
+            {!steps.week || steps.week.total === 0 ? (
+              <AppText style={styles.sheetSub}>
+                No steps recorded yet. Carry your phone with you and your walking will show up here.
+              </AppText>
+            ) : (
+              <>
+                <View style={styles.chart} accessibilityRole="image"
+                  accessibilityLabel={
+                    steps.week.series.map((d) => `${DAY_LABELS[new Date(d.day + "T00:00:00").getDay()]}: ${d.steps} steps`).join(", ")
+                  }>
+                  {steps.week.series.map((d) => {
+                    const peak = Math.max(...steps.week!.series.map((x) => x.steps), steps.week!.goal);
+                    const height = peak > 0 ? Math.max(Math.round((d.steps / peak) * 120), d.steps > 0 ? 6 : 3) : 3;
+                    const isBest = steps.week!.best_day?.day === d.day && d.steps > 0;
+                    const hitGoal = d.steps >= steps.week!.goal;
+                    return (
+                      <View key={d.day} style={styles.chartCol}>
+                        <AppText style={styles.chartValue}>{d.steps > 0 ? d.steps.toLocaleString() : ""}</AppText>
+                        <View style={[
+                          styles.chartBar,
+                          { height },
+                          hitGoal && { backgroundColor: theme.colors.success },
+                          isBest && { backgroundColor: theme.colors.marigold },
+                        ]} />
+                        <AppText style={styles.chartLabel}>
+                          {DAY_LABELS[new Date(d.day + "T00:00:00").getDay()]}
+                        </AppText>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.statRow}>
+                  <StepStat label="Best day" value={steps.week.best_day ? steps.week.best_day.steps.toLocaleString() : "—"} />
+                  <StepStat label="Daily average" value={steps.week.average.toLocaleString()} />
+                  <StepStat label="Goal reached" value={`${steps.week.goal_days} of 7`} />
+                </View>
+
+                <AppText style={styles.sheetSub}>
+                  {steps.week.best_day
+                    ? `Your best day was ${DAY_LABELS[new Date(steps.week.best_day.day + "T00:00:00").getDay()]}, with ${steps.week.best_day.steps.toLocaleString()} steps. That's ${steps.week.total.toLocaleString()} steps across the week.`
+                    : `${steps.week.total.toLocaleString()} steps across the week.`}
+                </AppText>
+              </>
+            )}
+
+            <Pressable style={styles.primaryBtn} onPress={() => setStepsOpen(false)} testID="steps-close"
+              accessibilityRole="button" accessibilityLabel="Close">
+              <AppText style={styles.primaryBtnText}>Close</AppText>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {/* Undoing a confirmed dose is deliberate, so a mis-tap can't erase it. */}
       {undo && (
         <View style={styles.backdrop} testID="undo-sheet">
@@ -377,6 +620,28 @@ export default function ElderHealth() {
           <AppText style={styles.toastText}>{toast}</AppText>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+function ExplainRow({ icon, title, body }: { icon: any; title: string; body?: string }) {
+  if (!body) return null;
+  return (
+    <View style={styles.explainRow}>
+      <Ionicons name={icon} size={22} color={theme.colors.brand} style={{ marginTop: 2 }} />
+      <View style={{ flex: 1 }}>
+        <AppText style={styles.explainTitle}>{title}</AppText>
+        <AppText style={styles.explainBody}>{body}</AppText>
+      </View>
+    </View>
+  );
+}
+
+function StepStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.stepStat}>
+      <AppText style={styles.stepStatValue}>{value}</AppText>
+      <AppText style={styles.stepStatLabel}>{label}</AppText>
     </View>
   );
 }
@@ -422,6 +687,54 @@ const styles = StyleSheet.create({
   scanBtn: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: theme.colors.brandLight, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999 },
   scanText: { color: theme.colors.brand, fontWeight: "800", fontSize: 15 },
   medList: { paddingHorizontal: 20, gap: 12 },
+  stepsCard: {
+    flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, marginBottom: 14,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg, padding: 16,
+    borderWidth: 1, borderColor: theme.colors.border, minHeight: 96,
+  },
+  stepsIcon: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: theme.colors.brandLight,
+    alignItems: "center", justifyContent: "center",
+  },
+  stepsLabel: { fontSize: theme.font.sm, color: theme.colors.muted, fontWeight: "700" },
+  stepsValue: { fontSize: theme.font.xxl, fontWeight: "800", color: theme.colors.onSurface, lineHeight: 38 },
+  stepsUnavailable: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, lineHeight: 21, marginTop: 2 },
+  stepsBarTrack: {
+    height: 10, borderRadius: 5, backgroundColor: theme.colors.surfaceTertiary,
+    overflow: "hidden", marginTop: 6, marginBottom: 4,
+  },
+  stepsBarFill: { height: "100%", borderRadius: 5, backgroundColor: theme.colors.success },
+  stepsGoal: { fontSize: theme.font.xs, color: theme.colors.muted },
+  chart: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", alignSelf: "stretch", height: 176, paddingTop: 8 },
+  chartCol: { flex: 1, alignItems: "center", justifyContent: "flex-end", gap: 6 },
+  chartValue: { fontSize: 11, color: theme.colors.muted, fontWeight: "700" },
+  chartBar: { width: 22, borderRadius: 6, backgroundColor: theme.colors.brand },
+  chartLabel: { fontSize: theme.font.xs, color: theme.colors.muted, fontWeight: "700" },
+  statRow: { flexDirection: "row", alignSelf: "stretch", gap: 10, marginTop: 4 },
+  stepStat: {
+    flex: 1, backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.md,
+    padding: 12, alignItems: "center", gap: 2, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  stepStatValue: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  stepStatLabel: { fontSize: theme.font.xs, color: theme.colors.muted, textAlign: "center" },
+  medActions: { gap: 4, alignItems: "center" },
+  medAction: { width: 44, height: 40, alignItems: "center", justifyContent: "center" },
+  removeIcon: {
+    width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.error,
+    alignItems: "center", justifyContent: "center", marginTop: 4,
+  },
+  dangerBtn: {
+    alignSelf: "stretch", backgroundColor: theme.colors.error, borderRadius: theme.radius.pill,
+    paddingVertical: 18, alignItems: "center", minHeight: 60, justifyContent: "center",
+  },
+  dangerBtnText: { color: "#fff", fontSize: theme.font.md, fontWeight: "800" },
+  explainRow: { flexDirection: "row", gap: 12, alignItems: "flex-start" },
+  explainTitle: { fontSize: theme.font.sm, fontWeight: "800", color: theme.colors.brand },
+  explainBody: { fontSize: theme.font.base, color: theme.colors.onSurface, lineHeight: 24, marginTop: 2 },
+  disclaimer: {
+    fontSize: theme.font.xs, color: theme.colors.muted, lineHeight: 19, fontStyle: "italic",
+    backgroundColor: theme.colors.surfaceTertiary, borderRadius: theme.radius.sm, padding: 12,
+  },
   medCard: { flexDirection: "row", alignItems: "center", gap: 14, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 14, borderWidth: 1, borderColor: theme.colors.border },
   medImg: { width: 56, height: 56, borderRadius: 14 },
   medName: { fontSize: 19, fontWeight: "800", color: theme.colors.onSurface },

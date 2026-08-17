@@ -12,6 +12,16 @@ import { theme, API } from "@/src/theme";
 
 type VoiceNote = { id: string; from_name: string; created_at: string; played_at: string | null };
 
+type WeeklySummary = {
+  headline: string;
+  body: string;
+  suggestion: string | null;
+  generated: boolean;
+  facts: { steps_this_week: number; days_they_walked: number; doses_confirmed_this_week: number };
+};
+
+type StepWeek = { today: number; goal: number; total: number; average: number; days_active: number; goal_days: number };
+
 type Analytics = {
   elder_name: string; location: string; last_active: string | null;
   most_used_feature: string; medicines: any[]; low_stock_count: number;
@@ -34,6 +44,8 @@ export default function ChildDashboard() {
   const [data, setData] = useState<Analytics | null>(null);
   const [prescriptions, setPrescriptions] = useState<any[]>([]);
   const [notes, setNotes] = useState<VoiceNote[]>([]);
+  const [summary, setSummary] = useState<WeeklySummary | null>(null);
+  const [stepWeek, setStepWeek] = useState<StepWeek | null>(null);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const notePlayer = useAudioPlayer();
   const [token, setTkn] = useState("");
@@ -50,6 +62,9 @@ export default function ChildDashboard() {
         apiFetch<VoiceNote[]>("/family/voice-notes").catch(() => []),
       ]);
       setData(a); setPrescriptions(pres); setTkn(t.token); setNotes(vn);
+      // Secondary panels shouldn't hold up the dashboard.
+      apiFetch<StepWeek>("/health/steps?days=7").then(setStepWeek).catch(() => {});
+      apiFetch<WeeklySummary>("/child/weekly-summary").then(setSummary).catch(() => {});
     } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
@@ -139,11 +154,29 @@ export default function ChildDashboard() {
           </View>
         )}
 
+        {/* Plain-language read on the week */}
+        {summary && (
+          <View style={styles.summaryCard} testID="weekly-summary">
+            <View style={styles.summaryHead}>
+              <Ionicons name="sparkles" size={20} color={theme.colors.marigoldDark} />
+              <AppText style={styles.summaryHeadline}>{summary.headline}</AppText>
+            </View>
+            <AppText style={styles.summaryBody}>{summary.body}</AppText>
+            {summary.suggestion ? (
+              <View style={styles.summarySuggestion}>
+                <Ionicons name="bulb-outline" size={18} color={theme.colors.brand} />
+                <AppText style={styles.summarySuggestionText}>{summary.suggestion}</AppText>
+              </View>
+            ) : null}
+          </View>
+        )}
+
         {/* Stat grid */}
         <View style={styles.grid}>
           <Stat icon="flame" label="Most used" value={data?.most_used_feature || "No activity yet"} color={theme.colors.marigoldDark} />
           <Stat icon="medkit" label="Low stock" value={`${data?.low_stock_count || 0} med`} color={data?.low_stock_count ? theme.colors.error : theme.colors.success} />
           <Stat icon="calendar" label="Appointments" value={`${data?.appointments.length || 0} upcoming`} color={theme.colors.brand} />
+          <Stat icon="walk" label={stepWeek ? `Walked ${stepWeek.days_active} of 7 days` : "Walking"} value={stepWeek ? `${stepWeek.total.toLocaleString()} steps` : "No data yet"} color={theme.colors.success} />
           <Pressable
             style={styles.statCard}
             onPress={() => router.push("/(child)/tasks")}
@@ -291,6 +324,18 @@ const styles = StyleSheet.create({
   alertRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   alertDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.error },
   alertText: { fontSize: 15, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+  summaryCard: {
+    marginHorizontal: 20, marginTop: 16, backgroundColor: theme.colors.marigoldLight,
+    borderRadius: theme.radius.lg, padding: 18, gap: 10,
+  },
+  summaryHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  summaryHeadline: { flex: 1, fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  summaryBody: { fontSize: theme.font.base, color: theme.colors.onSurfaceSecondary, lineHeight: 24 },
+  summarySuggestion: {
+    flexDirection: "row", gap: 8, alignItems: "flex-start",
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.md, padding: 12,
+  },
+  summarySuggestionText: { flex: 1, fontSize: theme.font.sm, color: theme.colors.onSurface, lineHeight: 21 },
   noteRow: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: theme.colors.border, minHeight: 72 },
   noteRowNew: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
   notePlay: { width: 46, height: 46, borderRadius: 23, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },

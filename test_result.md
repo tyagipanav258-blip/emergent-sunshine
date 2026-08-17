@@ -461,3 +461,180 @@
         exist as built-ins. Voice notes and calls resolve against whoever has
         actually joined with the family code, so a test account needs a connected
         child before those intents will produce an action.
+
+#====================================================================================================
+# Medicine removal, step tracking, and expanded AI
+#====================================================================================================
+
+## user_problem_statement: |
+  (1) Add a way to remove a medicine from the Health page, beside each medicine.
+  (2) Show the number of steps taken today, opening into best weekly stats, using
+  the phone's own activity data. (3) Audit where Gemini is integrated, recommend
+  where else it would help, and add it there.
+
+## AI integration map (before this change):
+  - Gemini 3.1 Pro   -> prescription photo OCR (_ocr_extract)
+  - Gemini 3.1 Pro   -> older chat assistant (assistant_chat)
+  - Gemini 2.5 Flash -> voice agent intent routing (_run_agent)
+  - GPT-5.4-mini     -> concierge request classification
+  - GPT-5.4-mini     -> reel question answering (voice_ask)
+  - GPT-5.4-mini     -> call/message intent detection (_detect_action)
+  - Whisper          -> speech to text
+  - OpenAI TTS       -> spoken replies
+
+## backend:
+  - task: "Remove a medicine and everything attached to it"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            DELETE /health/medicines/{id} removes the medicine, its dose ledger, its
+            missed-dose notifications, and withdraws any open auto-generated reorder
+            request. Verified: a deleted medicine cannot keep alerting, the family's
+            reorder queue is cleaned up, a second delete is a clean 404, and another
+            family cannot delete it.
+
+  - task: "Daily and weekly step tracking"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            POST /health/steps upserts a day's total (highest reading wins, since the
+            phone reports a running count) and GET /health/steps?days=7 returns the
+            week in the elder's own zone with zeros for missing days, plus best day,
+            average over active days, and goal-days. Family can read it; only the
+            elder can write it. Verified with a seeded week: totals, best day,
+            average, malformed-day rejection and role separation all correct.
+
+  - task: "Gemini medicine explainer"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            POST /health/medicines/{id}/explain answers "what is this for?" in plain
+            language for one of the elder's own medicines. Prompt forbids dose advice
+            and diagnosis; the response always carries a not-medical-advice notice.
+            An unparseable or empty answer is reported as "unknown" rather than a
+            blank card. Answers are cached by medicine name so repeat opens are free.
+            NEEDS RETESTING against the real Gemini model for answer quality and
+            safety wording — verified here against a stub.
+
+  - task: "Gemini weekly family summary"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            GET /child/weekly-summary turns the week's real figures (doses confirmed
+            and missed, low stock, steps, active days, app opens, completed requests)
+            into a headline, two or three sentences and an optional suggestion. The
+            prompt is instructed to use only the supplied figures and never invent an
+            event or a symptom; the figures are returned alongside the prose so the
+            family can check it. Falls back to a plain generated sentence if the model
+            is unavailable. NEEDS RETESTING for faithfulness against real data.
+
+## frontend:
+  - task: "Medicine row actions: explain and remove"
+    implemented: true
+    working: true
+    file: "frontend/app/(elder)/health.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Each medicine row gained a "?" explainer and a red remove button, placed
+            outside the confirm target so neither is a mis-tap for the other. Removal
+            asks first and states plainly that reminders and dose history go with it.
+
+  - task: "Step counter and weekly chart"
+    implemented: true
+    working: true
+    file: "frontend/src/hooks/use-steps.ts, frontend/app/(elder)/health.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Health opens with today's steps and progress toward a goal; tapping it
+            shows a seven-day bar chart with the best day highlighted, plus best day,
+            daily average and goal-days. iOS is asked for today's count directly;
+            Android counts forward from launch and adds it to the day's stored total,
+            which is why totals are synced to the backend. Degrades honestly where
+            there is no pedometer (web) — it says so and still shows the history.
+            NEEDS DEVICE TESTING: the pedometer path cannot run in a browser, so iOS
+            historical reads and Android live watching are unverified. Motion
+            permissions are declared in app.json (NSMotionUsageDescription,
+            ACTIVITY_RECOGNITION).
+
+  - task: "Weekly summary and walking on the family dashboard"
+    implemented: true
+    working: true
+    file: "frontend/app/(child)/index.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            The dashboard now leads with the plain-language weekly read and gained a
+            walking tile. Both load after the main payload so they never delay it.
+
+## metadata:
+  created_by: "main_agent"
+  version: "2.2"
+  test_sequence: 3
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Gemini medicine explainer"
+    - "Gemini weekly family summary"
+    - "Step counter and weekly chart"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+    - agent: "main"
+      message: |
+        25/25 new assertions pass, plus 58/58 and 19/19 on the earlier suites — 102
+        in total. tsc and eslint clean, web export succeeds, both roles driven in
+        Chromium with zero runtime errors.
+
+        Three things need testing where I could not:
+        1. The pedometer needs a real device; browsers have no step sensor. The UI
+           path for "no sensor" is verified, the sensor path is not.
+        2. Both new Gemini features ran against a stub. Please check answer quality
+           and, for the explainer, that the model holds the line on not giving dose
+           advice.
+        3. New medicines added by an elder now have no image (MED_IMAGES still keys
+           off type, so this is unchanged) — worth a look on a real device.

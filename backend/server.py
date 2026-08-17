@@ -622,6 +622,97 @@ async def add_medicine(b: MedIn, u: dict = Depends(current_user)):
     return _med_view(m, False)
 
 
+@api.delete("/health/medicines/{med_id}")
+async def delete_medicine(med_id: str, u: dict = Depends(current_user)):
+    """Remove a medicine and everything that hangs off it.
+
+    Its dose history goes too, so a deleted medicine can't keep generating
+    missed-dose alerts, and any open reorder request is withdrawn rather than
+    left for the family to action on something that no longer exists.
+    """
+    eid = await elder_id_for(u)
+    m = await db.medicines.find_one({"id": med_id, "elder_id": eid}, {"_id": 0})
+    if not m:
+        raise HTTPException(404, "Medicine not found")
+
+    await db.medicines.delete_one({"id": med_id, "elder_id": eid})
+    await db.intakes.delete_many({"elder_id": eid, "medicine_id": med_id})
+    await db.notifications.delete_many({"elder_id": eid, "kind": "missed_dose", "med_id": med_id})
+    withdrawn = await db.tasks.delete_many(
+        {"elder_id": eid, "med_id": med_id, "auto": True, "status": {"$nin": ["done", "declined"]}}
+    )
+    return {
+        "ok": True,
+        "name": m["name"],
+        "reorder_requests_withdrawn": withdrawn.deleted_count,
+        "message": f"{m['name']} has been removed from your medicines.",
+    }
+
+
+# ============================ STEPS ============================
+# The phone counts the steps; we keep the daily totals so a week of history
+# survives a reinstall, works on Android (whose pedometer can't be queried
+# retroactively), and can be shown to the family.
+STEP_GOAL_DEFAULT = 3000
+
+
+class StepsIn(BaseModel):
+    day: Optional[str] = None          # YYYY-MM-DD in the elder's own zone
+    steps: int = Field(ge=0, le=200000)
+    source: Optional[str] = None       # "pedometer" | "health" | "manual"
+
+
+@api.post("/health/steps")
+async def record_steps(b: StepsIn, u: dict = Depends(require_role("elder"))):
+    """Upsert a day's step count. Highest count for the day wins, since the
+    phone reports a running total that only grows."""
+    day = (b.day or elder_day(u)).strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise HTTPException(422, "Day must look like 2026-08-17")
+    existing = await db.steps.find_one({"elder_id": u["id"], "day": day})
+    steps = max(b.steps, (existing or {}).get("steps", 0))
+    await db.steps.update_one(
+        {"elder_id": u["id"], "day": day},
+        {"$set": {"elder_id": u["id"], "day": day, "steps": steps,
+                  "source": b.source or "pedometer",
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"day": day, "steps": steps}
+
+
+async def _step_week(elder: dict, days: int = 7) -> dict:
+    """The last N days ending today, in the elder's own zone. Missing days are
+    reported as zero rather than skipped, so the week always has seven bars."""
+    today = elder_now(elder).date()
+    wanted = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+    rows = await db.steps.find({"elder_id": elder["id"], "day": {"$in": wanted}}, {"_id": 0}).to_list(days)
+    by_day = {r["day"]: r["steps"] for r in rows}
+    series = [{"day": d, "steps": by_day.get(d, 0)} for d in wanted]
+    counted = [s["steps"] for s in series if s["steps"] > 0]
+    best = max(series, key=lambda s: s["steps"]) if counted else None
+    goal = (elder or {}).get("step_goal") or STEP_GOAL_DEFAULT
+    return {
+        "today": by_day.get(wanted[-1], 0),
+        "goal": goal,
+        "series": series,
+        "total": sum(s["steps"] for s in series),
+        "average": round(sum(counted) / len(counted)) if counted else 0,
+        "best_day": best if best and best["steps"] > 0 else None,
+        "days_active": len(counted),
+        "goal_days": sum(1 for s in series if s["steps"] >= goal),
+    }
+
+
+@api.get("/health/steps")
+async def get_steps(days: int = 7, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    if not elder:
+        raise HTTPException(404, "Account not found")
+    return await _step_week(elder, max(1, min(days, 31)))
+
+
 class OCRIn(BaseModel):
     image_base64: str
 
@@ -1266,6 +1357,148 @@ async def agent_voice(file: UploadFile = File(...), u: dict = Depends(require_ro
         raise HTTPException(422, "No speech detected. Please try again.")
     out = await _run_agent(u, transcript)
     return {"transcript": transcript, **out}
+
+
+# ============================ MEDICINE EXPLAINER ============================
+# Elders routinely take medicines nobody has explained to them. This answers
+# "what is this for?" in plain language — and is careful to stay a general
+# explanation, never advice about their own dose.
+EXPLAIN_SYS = (
+    "You explain a medicine to an adult in India aged 60-80 who is not medically trained. "
+    "Return ONLY JSON: {"
+    "\"what_for\": one plain sentence on what this kind of medicine is generally used for, "
+    "\"how_to_take\": one plain sentence of general good practice (with food, with water, same time daily), "
+    "\"watch_for\": one plain sentence on common, mild side effects to mention to a doctor, "
+    "\"unknown\": true only if you do not recognise the medicine}. "
+    "Use short, warm, everyday words. No medical jargon, no emojis, no lists. "
+    "Never tell them to change, stop or adjust a dose. Never diagnose."
+)
+
+
+@api.post("/health/medicines/{med_id}/explain")
+async def explain_medicine(med_id: str, u: dict = Depends(current_user)):
+    """A plain-language explanation of one of the elder's own medicines."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    eid = await elder_id_for(u)
+    m = await db.medicines.find_one({"id": med_id, "elder_id": eid}, {"_id": 0})
+    if not m:
+        raise HTTPException(404, "Medicine not found")
+
+    cached = await db.medicine_explainers.find_one({"key": m["name"].strip().lower()}, {"_id": 0})
+    if cached:
+        return {**cached["explainer"], "name": m["name"], "cached": True}
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"explain-{uuid.uuid4()}",
+            system_message=EXPLAIN_SYS,
+        ).with_model(*GEMINI)
+        raw = str(await chat.send_message(UserMessage(
+            text=f"Medicine: {m['name']}. Dose written on it: {m.get('dose') or 'not stated'}. Form: {m.get('type')}."
+        )))
+        mm = re.search(r"\{.*\}", raw, re.S)
+        parsed = json.loads(mm.group(0)) if mm else {}
+    except Exception as e:
+        logger.exception("medicine explainer failed")
+        raise HTTPException(502, f"Could not look that up right now: {e}")
+
+    what_for = str(parsed.get("what_for") or "").strip()
+    explainer = {
+        "what_for": what_for,
+        "how_to_take": str(parsed.get("how_to_take") or "").strip(),
+        "watch_for": str(parsed.get("watch_for") or "").strip(),
+        # An unparseable or empty answer is "we don't know", never a blank card.
+        "unknown": bool(parsed.get("unknown")) or not what_for,
+        # Shown verbatim in the app. The explanation is general, not personal advice.
+        "disclaimer": "This is general information, not medical advice. Always follow what your doctor told you.",
+    }
+    if not explainer["unknown"] and explainer["what_for"]:
+        await db.medicine_explainers.insert_one({
+            "key": m["name"].strip().lower(), "explainer": explainer,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    return {**explainer, "name": m["name"], "cached": False}
+
+
+# ============================ WEEKLY FAMILY SUMMARY ============================
+# The family dashboard is a wall of numbers. This turns the week into two or
+# three warm sentences an adult child can read in five seconds.
+SUMMARY_SYS = (
+    "You write a short weekly note for an adult child about how their elderly parent in India is doing. "
+    "You are given real figures. Use ONLY those figures — never invent an event, a symptom or a mood. "
+    "Return ONLY JSON: {"
+    "\"headline\": four to seven words summing up the week, "
+    "\"body\": two or three warm, plain sentences about what the figures show, "
+    "\"suggestion\": one kind, practical suggestion for the child, or null if nothing is needed}. "
+    "Be reassuring when things are going well and matter-of-fact when they are not. "
+    "Do not give medical advice. No emojis."
+)
+
+
+@api.get("/child/weekly-summary")
+async def weekly_summary(u: dict = Depends(require_role("child"))):
+    """A plain-language read on the parent's week, grounded in real figures."""
+    eid = u.get("elder_id")
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    if not elder:
+        raise HTTPException(404, "Parent account not found")
+
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    med_views = await _med_views(elder)
+    steps = await _step_week(elder, 7)
+    intakes = await db.intakes.count_documents({"elder_id": eid, "taken_at": {"$gte": since}})
+    missed = await db.notifications.count_documents(
+        {"elder_id": eid, "kind": "missed_dose", "at": {"$gte": since}}
+    )
+    acts = await db.activity.count_documents({"elder_id": eid, "at": {"$gte": since}})
+    tasks_done = await db.tasks.count_documents({"elder_id": eid, "status": "done"})
+
+    facts = {
+        "parent_first_name": (elder.get("name") or "Your parent").split(" ")[0],
+        "medicines_tracked": len(med_views),
+        "doses_confirmed_this_week": intakes,
+        "doses_missed_this_week": missed,
+        "medicines_running_low": [m["name"] for m in med_views if m["low"]],
+        "steps_this_week": steps["total"],
+        "average_steps_per_active_day": steps["average"],
+        "days_they_walked": steps["days_active"],
+        "days_they_met_their_step_goal": steps["goal_days"],
+        "step_goal": steps["goal"],
+        "times_they_opened_the_app": acts,
+        "requests_completed": tasks_done,
+    }
+
+    fallback = {
+        "headline": f"{facts['parent_first_name']}'s week",
+        "body": (
+            f"{facts['doses_confirmed_this_week']} doses confirmed and "
+            f"{facts['doses_missed_this_week']} missed. "
+            f"{plural(facts['steps_this_week'], 'step')} walked across {plural(facts['days_they_walked'], 'day')}."
+        ),
+        "suggestion": None,
+    }
+    if not EMERGENT_LLM_KEY:
+        return {**fallback, "facts": facts, "generated": False}
+
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY, session_id=f"summary-{uuid.uuid4()}",
+            system_message=SUMMARY_SYS,
+        ).with_model(*GEMINI)
+        raw = str(await chat.send_message(UserMessage(text=json.dumps(facts))))
+        mm = re.search(r"\{.*\}", raw, re.S)
+        parsed = json.loads(mm.group(0)) if mm else {}
+        return {
+            "headline": str(parsed.get("headline") or fallback["headline"]).strip(),
+            "body": str(parsed.get("body") or fallback["body"]).strip(),
+            "suggestion": (str(parsed["suggestion"]).strip() if parsed.get("suggestion") else None),
+            "facts": facts,
+            "generated": True,
+        }
+    except Exception:
+        logger.exception("weekly summary failed")
+        return {**fallback, "facts": facts, "generated": False}
 
 
 # ============================ SPOKEN CONFIRMATION ============================

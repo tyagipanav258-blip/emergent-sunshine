@@ -14,7 +14,8 @@
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Ask questions about videos using your voice.",
         "NSCameraUsageDescription": "Scan your prescription to add medicines.",
-        "NSPhotoLibraryUsageDescription": "Choose a prescription photo to add medicines."
+        "NSPhotoLibraryUsageDescription": "Choose a prescription photo to add medicines.",
+        "NSMotionUsageDescription": "Count your daily steps so you and your family can see how active you have been."
       }
     },
     "android": {
@@ -24,7 +25,12 @@
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.sunshineapp.jme3k7",
-      "permissions": ["RECORD_AUDIO", "CAMERA"]
+      "permissions": [
+        "RECORD_AUDIO",
+        "CAMERA",
+        "ACTIVITY_RECOGNITION",
+        "android.permission.ACTIVITY_RECOGNITION"
+      ]
     },
     "web": {
       "bundler": "metro",
