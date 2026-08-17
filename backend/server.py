@@ -346,7 +346,10 @@ async def _missed_dose_sweep(interval_seconds: int = 900):
 async def _family_contacts(elder_id: str) -> List[dict]:
     """The people actually registered to this elder. Never a placeholder."""
     kids = await db.users.find({"role": "child", "elder_id": elder_id}, {"_id": 0}).to_list(50)
-    return [{"id": c["id"], "name": c["name"], "relation": c.get("relation") or "Family", "email": c.get("email")} for c in kids]
+    return [{
+        "id": c["id"], "name": c["name"], "relation": c.get("relation") or "Family",
+        "email": c.get("email"), "photo_url": c.get("photo_url"),
+    } for c in kids]
 
 
 async def _pin_gate(phone: str) -> None:
@@ -505,6 +508,31 @@ DEMO_PHOTOS = [
     ("https://images.unsplash.com/photo-1444210971048-6130cf0c46cf?w=900&q=80", "The garden is blooming"),
 ]
 
+# A household rather than a single contact: the daughter who signs up is joined
+# by a son and a grandchild, so every screen that lists family has more than one
+# name in it. These are real user rows with no credentials — they cannot sign in,
+# and they disappear with the rest of the demo data.
+DEMO_MEMBERS = [
+    {"name": "Rahul Sharma", "relation": "Son",
+     "photo_url": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&q=80"},
+    {"name": "Aarohi Sharma", "relation": "Granddaughter",
+     "photo_url": "https://images.unsplash.com/photo-1595152772835-219674b2a8a6?w=400&q=80"},
+]
+
+# A face for anyone who joined for real but has not uploaded a picture yet, so
+# the family row never mixes photographs with grey silhouettes.
+DEMO_AVATARS = [
+    "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&q=80",
+    "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400&q=80",
+    "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?w=400&q=80",
+    "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=400&q=80",
+]
+
+
+def _demo_avatar(user_id: str) -> str:
+    """Stable per person, so a face does not change between refreshes."""
+    return DEMO_AVATARS[hash(user_id) % len(DEMO_AVATARS)]
+
 DEMO_MEDICINES = [
     {"name": "Amlodipine", "dose": "5 mg", "time": "8:00 AM", "type": "tablet", "per_day": 1, "stock": 24},
     {"name": "Metformin", "dose": "500 mg", "time": "1:00 PM", "type": "tablet", "per_day": 2, "stock": 5},
@@ -519,7 +547,34 @@ async def _seed_demo(elder: dict) -> dict:
     eid = elder["id"]
     now = datetime.now(timezone.utc)
     today = elder_now(elder).date()
-    created = {"medicines": 0, "appointments": 0, "steps": 0, "photos": 0, "tasks": 0, "invoices": 0}
+    created = {"medicines": 0, "appointments": 0, "steps": 0, "photos": 0, "tasks": 0,
+               "invoices": 0, "members": 0, "messages": 0}
+
+    # A household, so "Your family" is never a single face. Anyone who really
+    # signed up keeps their own row; these only fill the gaps around them.
+    existing = await _family_contacts(eid)
+    if len(existing) < len(DEMO_MEMBERS) + 1:
+        have = {c["name"] for c in existing}
+        for spec in DEMO_MEMBERS:
+            if spec["name"] in have:
+                continue
+            await db.users.insert_one({
+                "id": str(uuid.uuid4()), "role": "child", "elder_id": eid,
+                "name": spec["name"], "relation": spec["relation"],
+                "photo_url": spec["photo_url"],
+                # No email and no password hash: these accounts cannot be signed into.
+                "email": None, "created_at": now.isoformat(), "demo": True,
+            })
+            created["members"] += 1
+
+    # Anyone who joined for real gets a face too — including someone who signed
+    # up after the household was seeded, which is the usual order of events.
+    for c in await _family_contacts(eid):
+        if not c.get("photo_url"):
+            await db.users.update_one(
+                {"id": c["id"]},
+                {"$set": {"photo_url": _demo_avatar(c["id"]), "demo_photo": True}},
+            )
 
     # Medicines, with a week of dose history so adherence looks lived-in and the
     # missed-dose gate (which needs a prior confirmed intake) behaves normally.
@@ -635,6 +690,31 @@ async def _seed_demo(elder: dict) -> dict:
                             f"Sunshine arranged \"{pending['title']}\" for {elder.get('name', 'your parent')}. "
                             f"The total is \u20b9500.", {"task_id": pending["id"], "invoice_id": taxi_inv["id"]})
 
+    # A few exchanges already in the thread, so tapping a face opens a
+    # conversation rather than an empty screen.
+    if not await db.messages.count_documents({"elder_id": eid}):
+        contacts = await _family_contacts(eid)
+        openers = [
+            ("child", "Have you eaten?", "ate"),
+            ("elder", "I am doing well, do not worry", "im_good"),
+            ("child", "I will call you tonight", "call_tonight"),
+        ]
+        for c in contacts:
+            for i, (role, text, tpl) in enumerate(openers):
+                mine = role == "elder"
+                await db.messages.insert_one({
+                    "id": str(uuid.uuid4()), "elder_id": eid,
+                    "from_user_id": eid if mine else c["id"],
+                    "from_name": elder.get("name") if mine else c["name"],
+                    "from_role": "elder" if mine else "child",
+                    "to_user_id": c["id"] if mine else eid,
+                    "to_name": c["name"] if mine else elder.get("name"),
+                    "text": text, "template_id": tpl,
+                    "at": (now - timedelta(hours=(len(openers) - i) * 3)).isoformat(),
+                    "read": True, "demo": True,
+                })
+                created["messages"] += 1
+
     await db.users.update_one({"id": eid}, {"$set": {"demo_seeded": True}})
     return created
 
@@ -656,9 +736,16 @@ async def demo_clear(u: dict = Depends(current_user)):
     """Remove only the sample records, leaving anything real behind."""
     eid = await elder_id_for(u)
     removed = {}
-    for name in ("medicines", "intakes", "appointments", "steps", "photos", "tasks", "invoices", "voice_notes"):
+    for name in ("medicines", "intakes", "appointments", "steps", "photos", "tasks",
+                 "invoices", "voice_notes", "messages"):
         r = await db[name].delete_many({"elder_id": eid, "demo": True})
         removed[name] = r.deleted_count
+    # Sample relatives go too — but never anyone who actually signed up.
+    r = await db.users.delete_many({"elder_id": eid, "demo": True, "role": "child"})
+    removed["members"] = r.deleted_count
+    # A real account only borrowed its picture; hand it back.
+    await db.users.update_many({"elder_id": eid, "demo_photo": True},
+                               {"$unset": {"photo_url": "", "demo_photo": ""}})
     await db.users.update_one({"id": eid}, {"$set": {"demo_seeded": False}})
     return {"ok": True, "removed": removed}
 
@@ -2403,6 +2490,141 @@ async def mark_notification_read(nid: str, u: dict = Depends(current_user)):
 @api.post("/notifications/read-all")
 async def mark_all_read(u: dict = Depends(current_user)):
     r = await db.notifications.update_many({"to_user_id": u["id"], "read": False}, {"$set": {"read": True}})
+    return {"ok": True, "marked": r.modified_count}
+
+
+# ============================ QUICK MESSAGES ============================
+# Typing is the hardest thing we ask of an 71-year-old, and most of what families
+# send each other is the same handful of sentences. So the keyboard is optional:
+# one tap sends a whole message. The wording differs by who is speaking — a
+# parent asks "when will you visit", a daughter asks "did you take your medicine".
+
+QUICK_MESSAGES = {
+    "elder": [
+        {"id": "free", "text": "Are you free?", "icon": "time", "group": "asking"},
+        {"id": "call_me", "text": "Please call me", "icon": "call", "group": "asking"},
+        {"id": "text_later", "text": "Text me when you are free", "icon": "chatbubble", "group": "asking"},
+        {"id": "ate", "text": "Have you eaten?", "icon": "restaurant", "group": "caring"},
+        {"id": "sleeping", "text": "Are you sleeping?", "icon": "moon", "group": "caring"},
+        {"id": "reached", "text": "Did you reach safely?", "icon": "location", "group": "caring"},
+        {"id": "missing", "text": "Missing you", "icon": "heart", "group": "warmth"},
+        {"id": "im_good", "text": "I am doing well, do not worry", "icon": "sunny", "group": "warmth"},
+        {"id": "visit", "text": "Come and see me when you can", "icon": "home", "group": "warmth"},
+        {"id": "blessings", "text": "God bless you", "icon": "flower", "group": "warmth"},
+        {"id": "photo_please", "text": "Send me a photo", "icon": "image", "group": "asking"},
+    ],
+    "child": [
+        {"id": "free", "text": "Are you free?", "icon": "time", "group": "asking"},
+        {"id": "call_me", "text": "Call me when you can", "icon": "call", "group": "asking"},
+        {"id": "text_later", "text": "Text me when you are free", "icon": "chatbubble", "group": "asking"},
+        {"id": "ate", "text": "Have you eaten?", "icon": "restaurant", "group": "caring"},
+        {"id": "medicine", "text": "Did you take your medicine?", "icon": "medkit", "group": "caring"},
+        {"id": "sleeping", "text": "Are you sleeping?", "icon": "moon", "group": "caring"},
+        {"id": "walk", "text": "Did you go for your walk?", "icon": "walk", "group": "caring"},
+        {"id": "missing", "text": "Missing you", "icon": "heart", "group": "warmth"},
+        {"id": "im_good", "text": "I am doing well, do not worry", "icon": "sunny", "group": "warmth"},
+        {"id": "call_tonight", "text": "I will call you tonight", "icon": "moon", "group": "warmth"},
+        {"id": "photo_please", "text": "Send me a photo", "icon": "image", "group": "asking"},
+    ],
+}
+
+MESSAGE_GROUPS = [
+    {"id": "asking", "label": "Quick asks"},
+    {"id": "caring", "label": "Checking in"},
+    {"id": "warmth", "label": "Just because"},
+]
+
+
+async def _member_or_404(u: dict, member_id: str) -> dict:
+    """Resolve the other side of a conversation, in either direction."""
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No family account linked")
+    if u["role"] == "elder":
+        other = next((c for c in await _family_contacts(eid) if c["id"] == member_id), None)
+        if not other:
+            raise HTTPException(404, "That family member is not connected to your account")
+        return other
+    # A family member only ever talks to the parent they are connected to.
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    if not elder or member_id not in {eid, ""}:
+        raise HTTPException(404, "That family member is not connected to your account")
+    return {"id": elder["id"], "name": elder.get("name") or "Your parent",
+            "relation": "Parent", "photo_url": elder.get("photo_url")}
+
+
+@api.get("/family/quick-messages")
+async def quick_messages(u: dict = Depends(current_user)):
+    """The one-tap phrases this person would plausibly send."""
+    return {"groups": MESSAGE_GROUPS, "messages": QUICK_MESSAGES.get(u["role"], [])}
+
+
+class MessageIn(BaseModel):
+    to_user_id: str
+    template_id: Optional[str] = None
+    text: Optional[str] = None
+
+
+@api.post("/family/messages")
+async def send_message(b: MessageIn, u: dict = Depends(current_user)):
+    """Send a quick message. A template id is resolved server-side so both apps
+    always agree on the wording; free text is accepted for anything else."""
+    eid = await elder_id_for(u)
+    other = await _member_or_404(u, b.to_user_id)
+
+    text = (b.text or "").strip()
+    if b.template_id:
+        tpl = next((t for t in QUICK_MESSAGES.get(u["role"], []) if t["id"] == b.template_id), None)
+        if not tpl:
+            raise HTTPException(422, "Unknown message")
+        text = tpl["text"]
+    if not text:
+        raise HTTPException(422, "Please choose or write a message")
+    text = text[:300]
+
+    now = datetime.now(timezone.utc).isoformat()
+    msg = {
+        "id": str(uuid.uuid4()), "elder_id": eid,
+        "from_user_id": u["id"], "from_name": u.get("name") or "",
+        "from_role": u["role"],
+        "to_user_id": other["id"], "to_name": other["name"],
+        "text": text, "template_id": b.template_id, "at": now, "read": False,
+    }
+    await db.messages.insert_one(msg.copy())
+    await notify_users(eid, [other["id"]], "message",
+                       f"{(u.get('name') or 'Family').split(' ')[0]} says",
+                       text, {"from_user_id": u["id"]})
+    msg.pop("_id", None)
+    return {**msg, "mine": True}
+
+
+@api.get("/family/messages")
+async def list_messages(member_id: str = Query(...), u: dict = Depends(current_user)):
+    """The conversation with one person, oldest first — how a thread reads."""
+    eid = await elder_id_for(u)
+    other = await _member_or_404(u, member_id)
+    rows = await db.messages.find({
+        "elder_id": eid,
+        "$or": [
+            {"from_user_id": u["id"], "to_user_id": other["id"]},
+            {"from_user_id": other["id"], "to_user_id": u["id"]},
+        ],
+    }, {"_id": 0}).sort("at", 1).to_list(200)
+    unread = sum(1 for r in rows if r["to_user_id"] == u["id"] and not r.get("read"))
+    return {
+        "member": other,
+        "messages": [{**r, "mine": r["from_user_id"] == u["id"]} for r in rows],
+        "unread": unread,
+    }
+
+
+@api.post("/family/messages/read")
+async def mark_messages_read(member_id: str = Query(...), u: dict = Depends(current_user)):
+    other = await _member_or_404(u, member_id)
+    r = await db.messages.update_many(
+        {"from_user_id": other["id"], "to_user_id": u["id"], "read": False},
+        {"$set": {"read": True}},
+    )
     return {"ok": True, "marked": r.modified_count}
 
 

@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, Platform, ActivityIndicator, Share } from "react-native";
 import { AppText } from "@/src/components/AppText";
+import { Image } from "expo-image";
 import { AlertSettings } from "@/src/components/AlertSettings";
 import { GradientButton } from "@/src/components/GradientButton";
 import * as Clipboard from "expo-clipboard";
@@ -14,7 +15,7 @@ import { useTextScale } from "@/src/text-scale";
 import { useScrollChrome } from "@/src/scroll-context";
 import { theme, TEXT_SCALES, TextScaleKey } from "@/src/theme";
 
-type FamilyMember = { id: string; name: string; relation: string };
+type FamilyMember = { id: string; name: string; relation: string; photo_url?: string | null };
 
 const TEXT_SIZE_OPTIONS: { key: TextScaleKey; label: string }[] = [
   { key: "normal", label: "Normal" },
@@ -144,6 +145,7 @@ export default function ElderProfile() {
                 key={f.id}
                 name={f.name.split(" ")[0]}
                 relation={f.relation}
+                photo={f.photo_url}
                 onPress={() => router.push({ pathname: "/call", params: { name: f.name, who: f.relation } })}
               />
             ))}
@@ -269,7 +271,8 @@ export default function ElderProfile() {
   );
 }
 
-function CallBtn({ name, relation, onPress }: { name: string; relation?: string; onPress: () => void }) {
+function CallBtn({ name, relation, photo, onPress }:
+  { name: string; relation?: string; photo?: string | null; onPress: () => void }) {
   return (
     <Pressable
       style={styles.callBtn}
@@ -278,7 +281,11 @@ function CallBtn({ name, relation, onPress }: { name: string; relation?: string;
       accessibilityRole="button"
       accessibilityLabel={relation ? `Call ${name}, your ${relation.toLowerCase()}` : `Call ${name}`}
     >
-      <View style={styles.callIcon}><Ionicons name="person" size={30} color={theme.colors.brand} /></View>
+      <View style={styles.callIcon}>
+        {photo
+          ? <Image source={{ uri: photo }} style={styles.callImg} contentFit="cover" />
+          : <Ionicons name="person" size={30} color={theme.colors.brand} />}
+      </View>
       <AppText style={styles.callName}>{name}</AppText>
       {relation ? <AppText style={styles.callRelation}>{relation}</AppText> : null}
       <View style={styles.callGo}><Ionicons name="call" size={16} color="#fff" /></View>
@@ -337,7 +344,8 @@ const styles = StyleSheet.create({
   section: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
   callRow: { flexDirection: "row", gap: 12, paddingHorizontal: 20 },
   callBtn: { flex: 1, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 16, alignItems: "center", gap: 8, borderWidth: 1, borderColor: theme.colors.border },
-  callIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  callIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  callImg: { width: "100%", height: "100%" },
   callName: { fontSize: 16, fontWeight: "700", color: theme.colors.onSurface },
   callGo: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.success, alignItems: "center", justifyContent: "center" },
   empty: { fontSize: 16, color: theme.colors.muted, paddingHorizontal: 20, lineHeight: 22 },

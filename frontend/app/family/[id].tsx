@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { View, StyleSheet, FlatList, Pressable, ActivityIndicator, Platform, Dimensions } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { GradientButton } from "@/src/components/GradientButton";
+import { QuickConnect } from "@/src/components/QuickConnect";
 import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -113,7 +114,7 @@ export default function FamilyGallery() {
           accessibilityRole="button" accessibilityLabel="Go back">
           <Ionicons name="chevron-back" size={28} color={theme.colors.onSurface} />
         </Pressable>
-        <AppText style={styles.hTitle} numberOfLines={1}>{isSelf ? "Photos you shared" : `${who}'s photos`}</AppText>
+        <AppText style={styles.hTitle} numberOfLines={1}>{isSelf ? "Photos you shared" : who}</AppText>
         <View style={{ width: 44 }} />
       </View>
 
@@ -128,6 +129,13 @@ export default function FamilyGallery() {
           contentContainerStyle={{ padding: 20, gap: GAP, paddingBottom: insets.bottom + 32 }}
           ListHeaderComponent={
             <View style={{ gap: 12, marginBottom: 12 }}>
+              {/* Reaching them comes before looking at pictures of them. */}
+              {!isSelf && id ? (
+                <>
+                  <QuickConnect memberId={String(id)} memberName={who} />
+                  <View style={styles.rule} />
+                </>
+              ) : null}
               <AppText style={styles.section}>
                 {shared.length > 0
                   ? `${shared.length} photo${shared.length === 1 ? "" : "s"} shared in Sunshine`
@@ -223,6 +231,7 @@ const styles = StyleSheet.create({
   hTitle: { flex: 1, fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
   section: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  rule: { height: 1, backgroundColor: theme.colors.border, marginVertical: 12 },
   hint: { fontSize: theme.font.sm, color: theme.colors.muted, lineHeight: 21 },
   tile: { width: TILE, height: TILE, borderRadius: theme.radius.md, overflow: "hidden", backgroundColor: theme.colors.surfaceTertiary },
   tileImg: { width: "100%", height: "100%" },

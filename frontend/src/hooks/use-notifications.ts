@@ -69,4 +69,5 @@ export const NOTIFICATION_STYLE: Record<string, { icon: any; tone: "urgent" | "w
   voice_note: { icon: "mic", tone: "warm" },
   im_okay: { icon: "sunny", tone: "neutral" },
   family_joined: { icon: "person-add", tone: "neutral" },
+  message: { icon: "chatbubble-ellipses", tone: "warm" },
 };

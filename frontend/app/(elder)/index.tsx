@@ -13,7 +13,7 @@ import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 type News = { id: string; title: string; summary: string; source: string; image: string };
-type FamilyMember = { id: string; name: string; relation: string };
+type FamilyMember = { id: string; name: string; relation: string; photo_url?: string | null };
 
 export default function ElderHome() {
   const insets = useSafeAreaInsets();
@@ -128,13 +128,17 @@ export default function ElderHome() {
                       onPress={() => router.push({ pathname: "/family/[id]", params: { id: f.id, name: f.name } })}
                       testID={`family-${f.id}`}
                       accessibilityRole="button"
-                      accessibilityLabel={`${f.name}, your ${f.relation.toLowerCase()}. Open their photos.`}
+                      accessibilityLabel={`${f.name}, your ${f.relation.toLowerCase()}. Send them a message, a voice note or a photo.`}
                     >
                       <View style={styles.ring}>
                         <View style={styles.avatar}>
-                          <Ionicons name="person" size={30} color={theme.colors.brand} />
+                          {f.photo_url ? (
+                            <Image source={{ uri: f.photo_url }} style={styles.avatarImg} contentFit="cover" />
+                          ) : (
+                            <Ionicons name="person" size={30} color={theme.colors.brand} />
+                          )}
                         </View>
-                        <View style={styles.ringBadge}><Ionicons name="images" size={12} color="#fff" /></View>
+                        <View style={styles.ringBadge}><Ionicons name="chatbubble" size={12} color="#fff" /></View>
                       </View>
                       <AppText style={styles.storyName} numberOfLines={1}>{f.name.split(" ")[0]}</AppText>
                       <AppText style={styles.storyRel} numberOfLines={1}>{f.relation}</AppText>
@@ -186,8 +190,9 @@ const styles = StyleSheet.create({
   },
   avatar: {
     width: 68, height: 68, borderRadius: 34, backgroundColor: theme.colors.surfaceTertiary,
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center", justifyContent: "center", overflow: "hidden",
   },
+  avatarImg: { width: "100%", height: "100%" },
   ringBadge: {
     position: "absolute", bottom: -2, right: -2, width: 24, height: 24, borderRadius: 12,
     backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center",
