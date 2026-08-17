@@ -5,9 +5,12 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAudioPlayer } from "expo-audio";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { theme, API } from "@/src/theme";
+
+type VoiceNote = { id: string; from_name: string; created_at: string; played_at: string | null };
 
 type Analytics = {
   elder_name: string; location: string; last_active: string | null;
@@ -30,6 +33,9 @@ export default function ChildDashboard() {
   const { user } = useAuth();
   const [data, setData] = useState<Analytics | null>(null);
   const [prescriptions, setPrescriptions] = useState<any[]>([]);
+  const [notes, setNotes] = useState<VoiceNote[]>([]);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const notePlayer = useAudioPlayer();
   const [token, setTkn] = useState("");
   const [viewer, setViewer] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -37,17 +43,27 @@ export default function ChildDashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [a, pres, t] = await Promise.all([
+      const [a, pres, t, vn] = await Promise.all([
         apiFetch<Analytics>("/child/analytics"),
         apiFetch<any[]>("/prescriptions").catch(() => []),
-        apiFetch<{ token: string }>("/prescriptions/image-token").catch(() => ({ token: "" })),
+        apiFetch<{ token: string }>("/media-token", { method: "POST" }).catch(() => ({ token: "" })),
+        apiFetch<VoiceNote[]>("/family/voice-notes").catch(() => []),
       ]);
-      setData(a); setPrescriptions(pres); setTkn(t.token);
+      setData(a); setPrescriptions(pres); setTkn(t.token); setNotes(vn);
     } catch {}
     setLoading(false); setRefreshing(false);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const playNote = useCallback((id: string) => {
+    const base = API.replace(/\/api$/, "");
+    notePlayer.replace({ uri: `${base}/api/family/voice-notes/${id}/audio?token=${encodeURIComponent(token)}` });
+    notePlayer.play();
+    setPlayingId(id);
+    // Reflect "heard" straight away; the server marks it on first fetch.
+    setNotes((prev) => prev.map((n) => (n.id === id ? { ...n, played_at: new Date().toISOString() } : n)));
+  }, [notePlayer, token]);
 
   if (loading) return <View style={[styles.root, styles.center, { paddingTop: insets.top }]}><ActivityIndicator size="large" color={theme.colors.brand} /></View>;
 
@@ -73,6 +89,37 @@ export default function ChildDashboard() {
             <AppText style={styles.bannerSub}><Ionicons name="location" size={14} color={theme.colors.muted} /> {data?.location}</AppText>
           </View>
         </View>
+
+        {/* Voice notes from the parent */}
+        {notes.length > 0 && (
+          <>
+            <AppText style={styles.section}>Voice notes</AppText>
+            <View style={{ gap: 12, paddingHorizontal: 20 }}>
+              {notes.slice(0, 5).map((n) => {
+                const unheard = !n.played_at;
+                return (
+                  <Pressable
+                    key={n.id}
+                    style={[styles.noteRow, unheard && styles.noteRowNew]}
+                    onPress={() => playNote(n.id)}
+                    testID={`voice-note-${n.id}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Play voice note from ${n.from_name}, ${timeAgo(n.created_at)}${unheard ? ", not heard yet" : ""}`}
+                  >
+                    <View style={[styles.notePlay, playingId === n.id && { backgroundColor: theme.colors.success }]}>
+                      <Ionicons name={playingId === n.id ? "volume-high" : "play"} size={22} color="#fff" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <AppText style={styles.medName}>{n.from_name}</AppText>
+                      <AppText style={styles.medMeta}>{timeAgo(n.created_at)}</AppText>
+                    </View>
+                    {unheard && <View style={styles.newPill}><AppText style={styles.newPillText}>New</AppText></View>}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </>
+        )}
 
         {/* Alerts — SOS first, then missed doses */}
         {data?.alerts && data.alerts.length > 0 && (
@@ -244,6 +291,11 @@ const styles = StyleSheet.create({
   alertRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   alertDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.error },
   alertText: { fontSize: 15, color: theme.colors.onSurface, flex: 1, fontWeight: "500" },
+  noteRow: { flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, padding: 14, borderWidth: 1, borderColor: theme.colors.border, minHeight: 72 },
+  noteRowNew: { borderColor: theme.colors.brand, backgroundColor: theme.colors.brandLight },
+  notePlay: { width: 46, height: 46, borderRadius: 23, backgroundColor: theme.colors.brand, alignItems: "center", justifyContent: "center" },
+  newPill: { backgroundColor: theme.colors.marigold, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+  newPillText: { fontSize: 13, fontWeight: "800", color: theme.colors.onMarigold },
   alertDotUrgent: { width: 9, height: 9, borderRadius: 5 },
   alertTextUrgent: { fontWeight: "800", color: theme.colors.error },
   presCard: { width: 120, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: theme.colors.border },

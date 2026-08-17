@@ -289,3 +289,175 @@
         2. GET /family-stories is removed; GET /family returns the real members.
         Existing tests in backend/tests were updated for both, plus auth headers on
         the assistant endpoints and the removal of the invented Priya/Rahul cast.
+
+#====================================================================================================
+# Voice agent feature pass
+#====================================================================================================
+
+## user_problem_statement: |
+  Check whether four voice-agent features are present and working, and make them
+  work if not: (1) family voice notes, (2) adding a medicine by speaking it,
+  (3) a spoken "yes, do it" confirmation before calls and SOS, (4) Sunshine
+  reading its replies aloud.
+
+## backend:
+  - task: "Family voice notes — record, store, deliver, play"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "main"
+          comment: |
+            AUDIT: the agent returned a voice_note action and replied "Record your
+            voice note now", but there was no storage endpoint and no recorder UI.
+            Nothing was ever recorded or delivered — a dead end.
+        - working: true
+          agent: "main"
+          comment: |
+            Added POST /family/voice-notes (multipart, 10 MB cap, recipient must be a
+            really-connected family member), GET /family/voice-notes (elders see sent,
+            family sees received) and GET /family/voice-notes/{id}/audio, which marks
+            the note heard on first play and writes a notification for the recipient.
+            Verified: send -> appears unheard in the family inbox -> plays -> marked
+            heard; cross-family fetch returns 404.
+
+  - task: "Spoken yes/no confirmation endpoint"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: false
+          agent: "main"
+          comment: |
+            AUDIT: the backend set confirm:true and the reply said "Tap Yes to
+            confirm", but the app had no confirm step — it navigated straight into
+            the call, and a voice-raised SOS was dropped entirely.
+        - working: true
+          agent: "main"
+          comment: |
+            Added POST /agent/confirm, which transcribes a short reply and classifies
+            it. The classifier is deliberately conservative — it accepts English and
+            Hindi yes/no forms ("haan ji", "nahi") and returns null for anything
+            ambiguous, so an unclear answer re-asks rather than raising an alert.
+
+  - task: "Text-to-speech for agent replies"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: false
+          agent: "main"
+          comment: "AUDIT: no TTS endpoint existed; the client class was imported and never used."
+        - working: true
+          agent: "main"
+          comment: |
+            Added POST /agent/speak (synthesizes, caches, returns an id + media token)
+            and GET /agent/speech/{id}, so the player streams the audio instead of
+            buffering it through JavaScript. A background sweep drops cached speech
+            after 30 minutes.
+
+            NEEDS RETESTING ON THE PREVIEW: this repo never called OpenAITextToSpeech,
+            so its method name is not pinned anywhere. _synthesize() probes
+            generate_speech / synthesize / speak / create / generate / text_to_speech
+            in turn and uses whichever the installed wheel exposes, logging the ones
+            that fail. Verified here against a stub only. If none matches, the
+            endpoint returns 502 and the app stays usable — speech is an enhancement,
+            the reply is already on screen.
+
+## frontend:
+  - task: "Voice note recorder in the assistant, inbox on the family dashboard"
+    implemented: true
+    working: true
+    file: "frontend/app/assistant.tsx, frontend/app/(child)/index.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Asking for a voice note opens a record/send sheet naming the real
+            recipient. The family dashboard gained a Voice notes section with play
+            buttons and a "New" badge for unheard notes.
+
+  - task: "Confirmation sheet with tap and voice answers"
+    implemented: true
+    working: true
+    file: "frontend/app/assistant.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Calls and SOS raised by the agent are now held in a confirmation sheet
+            with "Yes, do it", "Answer by voice" and "No, cancel". Verified that no
+            SOS notification reaches the family until the elder confirms.
+
+  - task: "Sunshine reads replies aloud"
+    implemented: true
+    working: true
+    file: "frontend/src/hooks/use-speech.ts, frontend/app/assistant.tsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            Every reply is spoken automatically, with a speaker toggle in the header
+            that is remembered between sessions. A newer reply cancels an older one
+            still being fetched. Playback path needs a device check once the real
+            TTS wheel is available.
+
+## metadata:
+  created_by: "main_agent"
+  version: "2.1"
+  test_sequence: 2
+  run_ui: false
+
+## test_plan:
+  current_focus:
+    - "Text-to-speech for agent replies"
+    - "Sunshine reads replies aloud"
+    - "Family voice notes — record, store, deliver, play"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+## agent_communication:
+    - agent: "main"
+      message: |
+        Audited the four requested features first. Only "medicine by voice" already
+        worked — it was creating the medicine server-side correctly. The other three
+        were partial or absent and have been built:
+
+        - Voice notes had an intent and a reply but no recorder, no storage and no
+          way for the family to listen. Now end to end.
+        - Confirmation existed only as backend intent (confirm:true) and reply text;
+          the app fired calls immediately and ignored voice-raised SOS. Now a sheet
+          with tap or spoken yes/no.
+        - Text-to-speech did not exist at all. Now synthesized server-side and played
+          in the app, with a remembered on/off toggle.
+
+        Verification: 19/19 new feature assertions, 58/58 earlier regression
+        assertions, tsc + eslint clean, web export succeeds, driven in Chromium with
+        zero runtime errors.
+
+        Please prioritise the two items marked needs_retesting — both depend on the
+        real emergentintegrations TTS wheel, which this environment cannot reach.
+        Also note: the "Priya or Rahul" contacts from the original spec no longer
+        exist as built-ins. Voice notes and calls resolve against whoever has
+        actually joined with the family code, so a test account needs a connected
+        child before those intents will produce an action.

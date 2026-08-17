@@ -14,7 +14,7 @@ from typing import List, Optional, Literal
 
 import jwt
 import requests
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -25,6 +25,7 @@ from pwdlib import PasswordHash
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
 from emergentintegrations.llm.openai.speech_to_text import OpenAISpeechToText
+from emergentintegrations.llm.openai.text_to_speech import OpenAITextToSpeech
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -37,8 +38,13 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 # 7 days. A stolen phone shouldn't hand over a health record for a month.
 JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "10080"))
-# Short-lived, purpose-scoped tokens for streamed prescription images.
-IMAGE_TOKEN_MINUTES = 10
+# Short-lived, purpose-scoped tokens for streamed media (prescription photos,
+# voice notes). Never usable as a session credential.
+MEDIA_TOKEN_MINUTES = 10
+MEDIA_SCOPE = "media"
+
+TTS_MODEL = os.environ.get("TTS_MODEL", "tts-1")
+TTS_VOICE = os.environ.get("TTS_VOICE", "shimmer")
 
 # Elders are in India unless they tell us otherwise. Every schedule, greeting and
 # day boundary is computed in the elder's own zone, never the server's.
@@ -689,19 +695,66 @@ async def list_prescriptions(u: dict = Depends(current_user)):
     return [{"id": d["id"], "medicines": d["medicines"], "created_at": d["created_at"]} for d in docs]
 
 
-def make_image_token(uid: str) -> str:
-    """A narrow, short-lived token. A leaked image URL can't be replayed as a session."""
+AUDIO_EXTS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "ogg"}
+AUDIO_TYPES = {
+    "m4a": "audio/m4a", "mp3": "audio/mpeg", "mpeg": "audio/mpeg", "mpga": "audio/mpeg",
+    "mp4": "audio/mp4", "wav": "audio/wav", "webm": "audio/webm", "ogg": "audio/ogg",
+}
+
+
+def _audio_ext(filename: Optional[str], default: str = "m4a") -> str:
+    if filename and "." in filename:
+        e = filename.rsplit(".", 1)[-1].lower()
+        if e in AUDIO_EXTS:
+            return e
+    return default
+
+
+async def _user_for_media(
+    token: Optional[str],
+    creds: Optional[HTTPAuthorizationCredentials],
+) -> dict:
+    """Resolve the caller for a streamed media response.
+
+    Prefers the Authorization header; falls back to a short-lived token scoped to
+    media so a shared URL can never act as a session.
+    """
+    if creds:
+        return await current_user(creds)
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+    if payload.get("scope") != MEDIA_SCOPE:
+        raise HTTPException(403, "This token cannot be used for media")
+    u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
+    if not u:
+        raise HTTPException(401, "User not found")
+    return u
+
+
+def make_media_token(uid: str) -> str:
+    """A narrow, short-lived token. A leaked media URL can't be replayed as a session."""
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"sub": uid, "scope": "prescription_image", "iat": now,
-         "exp": now + timedelta(minutes=IMAGE_TOKEN_MINUTES)},
+        {"sub": uid, "scope": MEDIA_SCOPE, "iat": now,
+         "exp": now + timedelta(minutes=MEDIA_TOKEN_MINUTES)},
         JWT_SECRET, algorithm=JWT_ALG,
     )
 
 
+@api.post("/media-token")
+async def media_token(u: dict = Depends(current_user)):
+    """One short-lived token for streamed prescription images and voice notes."""
+    return {"token": make_media_token(u["id"]), "expires_in": MEDIA_TOKEN_MINUTES * 60}
+
+
+# Kept so existing clients that ask for an image token keep working.
 @api.post("/prescriptions/image-token")
 async def prescription_image_token(u: dict = Depends(current_user)):
-    return {"token": make_image_token(u["id"]), "expires_in": IMAGE_TOKEN_MINUTES * 60}
+    return {"token": make_media_token(u["id"]), "expires_in": MEDIA_TOKEN_MINUTES * 60}
 
 
 @api.get("/prescriptions/{pid}/image")
@@ -710,23 +763,9 @@ async def prescription_image(
     token: Optional[str] = Query(None),
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
 ):
-    """Prefer the Authorization header; fall back to a scoped image token for
+    """Prefer the Authorization header; fall back to a scoped media token for
     clients that can't set headers on an image request."""
-    if creds:
-        u = await current_user(creds)
-    elif token:
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-        except Exception:
-            raise HTTPException(401, "Invalid token")
-        if payload.get("scope") != "prescription_image":
-            raise HTTPException(403, "This token cannot be used for images")
-        u = await db.users.find_one({"id": payload.get("sub")}, {"_id": 0})
-        if not u:
-            raise HTTPException(401, "User not found")
-    else:
-        raise HTTPException(401, "Not authenticated")
-
+    u = await _user_for_media(token, creds)
     eid = await elder_id_for(u)
     doc = await db.prescriptions.find_one({"id": pid, "elder_id": eid, "deleted": {"$ne": True}})
     if not doc:
@@ -1217,11 +1256,7 @@ async def agent_voice(file: UploadFile = File(...), u: dict = Depends(require_ro
     audio = await file.read()
     if not audio:
         raise HTTPException(400, "Empty audio")
-    ext = "m4a"
-    if file.filename and "." in file.filename:
-        e = file.filename.rsplit(".", 1)[-1].lower()
-        if e in {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"}:
-            ext = e
+    ext = _audio_ext(file.filename)
     try:
         transcript = await _transcribe_audio(audio, ext)
     except Exception as e:
@@ -1231,6 +1266,227 @@ async def agent_voice(file: UploadFile = File(...), u: dict = Depends(require_ro
         raise HTTPException(422, "No speech detected. Please try again.")
     out = await _run_agent(u, transcript)
     return {"transcript": transcript, **out}
+
+
+# ============================ SPOKEN CONFIRMATION ============================
+YES_WORDS = {"yes", "yeah", "yep", "yes please", "ok", "okay", "sure", "do it", "go ahead",
+             "please do", "correct", "right", "haan", "ha", "ji", "haan ji", "theek hai", "kar do"}
+NO_WORDS = {"no", "nope", "not now", "cancel", "stop", "don't", "do not", "nahi", "nahin",
+            "mat karo", "rehne do", "wait"}
+
+
+def _classify_yes_no(text: str) -> Optional[bool]:
+    """True for yes, False for no, None when it isn't a clear answer.
+
+    Deliberately conservative: an ambiguous reply must not be read as consent
+    for something as consequential as an emergency alert.
+    """
+    t = re.sub(r"[^a-z\s]", "", (text or "").lower()).strip()
+    if not t:
+        return None
+    if t in YES_WORDS:
+        return True
+    if t in NO_WORDS:
+        return False
+    words = set(t.split())
+    hit_yes = bool(words & {w for w in YES_WORDS if " " not in w}) or any(p in t for p in YES_WORDS if " " in p)
+    hit_no = bool(words & {w for w in NO_WORDS if " " not in w}) or any(p in t for p in NO_WORDS if " " in p)
+    if hit_yes and not hit_no:
+        return True
+    if hit_no and not hit_yes:
+        return False
+    return None
+
+
+@api.post("/agent/confirm")
+async def agent_confirm(file: UploadFile = File(...), u: dict = Depends(require_role("elder"))):
+    """Transcribe a short spoken reply and say whether it was a clear yes or no."""
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "Empty audio")
+    ext = _audio_ext(file.filename)
+    try:
+        transcript = await _transcribe_audio(audio, ext)
+    except Exception as e:
+        logger.exception("confirm transcription failed")
+        raise HTTPException(502, f"Could not understand audio: {e}")
+    answer = _classify_yes_no(transcript)
+    return {"transcript": transcript, "answer": answer}
+
+
+# ============================ SUNSHINE SPEAKS BACK ============================
+async def _synthesize(text: str) -> bytes:
+    """Render a reply as speech.
+
+    The Emergent TTS client's exact method name isn't pinned by this repo, so we
+    try the plausible ones in turn and use whichever the installed wheel exposes.
+    """
+    tts = OpenAITextToSpeech(api_key=EMERGENT_LLM_KEY)
+    last_error = None
+    for name in ("generate_speech", "synthesize", "speak", "create", "generate", "text_to_speech"):
+        fn = getattr(tts, name, None)
+        if not callable(fn):
+            continue
+        try:
+            out = fn(text=text, model=TTS_MODEL, voice=TTS_VOICE)
+            if hasattr(out, "__await__"):
+                out = await out
+            if isinstance(out, (bytes, bytearray)):
+                return bytes(out)
+            for attr in ("content", "audio", "data", "audio_content"):
+                blob = getattr(out, attr, None)
+                if isinstance(blob, (bytes, bytearray)):
+                    return bytes(blob)
+            if isinstance(out, str):
+                return base64.b64decode(out)
+        except Exception as e:  # try the next candidate name
+            last_error = e
+            logger.warning("TTS via %s() failed: %s", name, e)
+    raise RuntimeError(f"No usable text-to-speech method on the client ({last_error})")
+
+
+class SpeakIn(BaseModel):
+    text: str
+
+
+@api.post("/agent/speak")
+async def agent_speak(b: SpeakIn, u: dict = Depends(current_user)):
+    """Synthesize a reply and hand back a URL the audio player can stream.
+
+    Returning an id rather than raw bytes lets the client play it directly with
+    a short-lived media token, instead of buffering audio through JavaScript.
+    """
+    if not EMERGENT_LLM_KEY:
+        raise HTTPException(500, "AI not configured")
+    text = b.text.strip()[:800]
+    if not text:
+        raise HTTPException(400, "Nothing to say")
+    try:
+        audio = await _synthesize(text)
+    except Exception as e:
+        logger.exception("speech synthesis failed")
+        raise HTTPException(502, f"Could not generate speech: {e}")
+
+    sid = str(uuid.uuid4())
+    await db.speech_cache.insert_one({
+        "id": sid, "user_id": u["id"], "audio": audio,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {
+        "id": sid,
+        "url": f"/api/agent/speech/{sid}",
+        "token": make_media_token(u["id"]),
+        "bytes": len(audio),
+    }
+
+
+@api.get("/agent/speech/{sid}")
+async def agent_speech_audio(
+    sid: str,
+    token: Optional[str] = Query(None),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+):
+    u = await _user_for_media(token, creds)
+    doc = await db.speech_cache.find_one({"id": sid, "user_id": u["id"]})
+    if not doc:
+        raise HTTPException(404, "That reply is no longer available")
+    return Response(content=doc["audio"], media_type="audio/mpeg",
+                    headers={"Cache-Control": "private, max-age=600"})
+
+
+async def _speech_cache_sweep(interval_seconds: int = 1800, keep_minutes: int = 30):
+    """Spoken replies are throwaway; don't let them accumulate."""
+    while True:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(minutes=keep_minutes)).isoformat()
+            await db.speech_cache.delete_many({"created_at": {"$lt": cutoff}})
+        except Exception:
+            logger.exception("speech cache sweep failed")
+        await asyncio.sleep(interval_seconds)
+
+
+# ============================ FAMILY VOICE NOTES ============================
+@api.post("/family/voice-notes")
+async def send_voice_note(
+    file: UploadFile = File(...),
+    to_user_id: str = Form(...),
+    u: dict = Depends(require_role("elder")),
+):
+    """Store a recorded note and notify the family member it was addressed to."""
+    contacts = await _family_contacts(u["id"])
+    recipient = next((c for c in contacts if c["id"] == to_user_id), None)
+    if not recipient:
+        raise HTTPException(404, "That family member is not connected to your account")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(400, "Empty recording")
+    if len(audio) > 10 * 1024 * 1024:
+        raise HTTPException(413, "That recording is too long. Please keep it under a minute.")
+
+    ext = _audio_ext(file.filename)
+    nid = str(uuid.uuid4())
+    storage_path = f"{APP_NAME}/voice-notes/{u['id']}/{nid}.{ext}"
+    try:
+        await run_in_threadpool(put_object, storage_path, audio, AUDIO_TYPES.get(ext, "audio/m4a"))
+    except Exception as e:
+        logger.exception("voice note upload failed")
+        raise HTTPException(502, f"Could not save your voice note: {e}")
+
+    doc = {
+        "id": nid, "elder_id": u["id"], "from_user_id": u["id"], "from_name": u.get("name"),
+        "to_user_id": recipient["id"], "to_name": recipient["name"],
+        "storage_path": storage_path, "ext": ext, "bytes": len(audio),
+        "created_at": datetime.now(timezone.utc).isoformat(), "played_at": None, "deleted": False,
+    }
+    await db.voice_notes.insert_one(doc.copy())
+    await db.notifications.insert_one({
+        "id": str(uuid.uuid4()), "elder_id": u["id"], "kind": "voice_note",
+        "to": "family", "to_user_id": recipient["id"], "voice_note_id": nid,
+        "message": f"{u.get('name', 'Your parent')} sent you a voice note.",
+        "at": datetime.now(timezone.utc).isoformat(), "read": False,
+    })
+    return {"id": nid, "to_name": recipient["name"], "delivered": True}
+
+
+@api.get("/family/voice-notes")
+async def list_voice_notes(u: dict = Depends(current_user)):
+    """Elders see what they sent; family members see what was sent to them."""
+    eid = await elder_id_for(u)
+    q = {"elder_id": eid, "deleted": {"$ne": True}}
+    if u["role"] == "child":
+        q["to_user_id"] = u["id"]
+    docs = await db.voice_notes.find(q, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return [
+        {"id": d["id"], "from_name": d.get("from_name"), "to_name": d.get("to_name"),
+         "created_at": d["created_at"], "played_at": d.get("played_at")}
+        for d in docs
+    ]
+
+
+@api.get("/family/voice-notes/{nid}/audio")
+async def voice_note_audio(
+    nid: str,
+    token: Optional[str] = Query(None),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+):
+    u = await _user_for_media(token, creds)
+    eid = await elder_id_for(u)
+    q = {"id": nid, "elder_id": eid, "deleted": {"$ne": True}}
+    if u["role"] == "child":
+        q["to_user_id"] = u["id"]
+    doc = await db.voice_notes.find_one(q)
+    if not doc:
+        raise HTTPException(404, "Voice note not found")
+    try:
+        content, ctype = await run_in_threadpool(get_object, doc["storage_path"])
+    except Exception:
+        raise HTTPException(404, "Recording not available")
+    if u["role"] == "child" and not doc.get("played_at"):
+        await db.voice_notes.update_one({"id": nid}, {"$set": {"played_at": datetime.now(timezone.utc).isoformat()}})
+    return Response(content=content, media_type=ctype or AUDIO_TYPES.get(doc.get("ext", "m4a"), "audio/m4a"))
 
 
 @api.get("/")
@@ -1243,11 +1499,13 @@ app.add_middleware(CORSMiddleware, allow_credentials=True, allow_origins=["*"], 
 
 
 _sweep_task: Optional[asyncio.Task] = None
+_speech_task: Optional[asyncio.Task] = None
+_background_tasks: List[asyncio.Task] = []
 
 
 @app.on_event("startup")
 async def startup():
-    global _sweep_task
+    global _sweep_task, _speech_task
     try:
         await run_in_threadpool(init_storage)
         logger.info("Object storage initialized")
@@ -1255,11 +1513,13 @@ async def startup():
         logger.exception("Object storage init failed (will retry on first upload)")
     if os.environ.get("DISABLE_SWEEP") != "1":
         _sweep_task = asyncio.create_task(_missed_dose_sweep())
-        logger.info("Missed-dose sweep started")
+        _speech_task = asyncio.create_task(_speech_cache_sweep())
+        _background_tasks.extend([_sweep_task, _speech_task])
+        logger.info("Background sweeps started")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    if _sweep_task:
-        _sweep_task.cancel()
+    for t in _background_tasks:
+        t.cancel()
     client.close()
