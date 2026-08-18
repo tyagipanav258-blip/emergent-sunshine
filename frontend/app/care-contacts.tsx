@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Button, Card, IconWell, SectionHeader } from "@/src/components/ui";
+import { Button, IconWell, SectionHeader } from "@/src/components/ui";
 import { theme } from "@/src/theme";
 
 /**

@@ -5,7 +5,7 @@ import { AppText } from "@/src/components/AppText";
 import { GradientFill } from "@/src/components/GradientFill";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { theme, gradients } from "@/src/theme";
+import { theme } from "@/src/theme";
 
 /**
  * The shared surface of the app: card, button, chip, icon well, stat tile.
