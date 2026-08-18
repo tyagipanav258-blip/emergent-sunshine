@@ -1,13 +1,13 @@
 import { useCallback, useState } from "react";
 import { View, StyleSheet, ScrollView, Pressable, TextInput, ActivityIndicator, Platform } from "react-native";
 import { AppText } from "@/src/components/AppText";
-import { GradientButton } from "@/src/components/GradientButton";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
+import { Button, Card, IconWell, SectionHeader } from "@/src/components/ui";
 import { theme } from "@/src/theme";
 
 /**
@@ -120,12 +120,12 @@ export default function CareContacts() {
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.brand} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
-          <AppText style={styles.section}>In an emergency</AppText>
-          <AppText style={styles.sectionSub}>
-            {isElder
+          <SectionHeader
+            title="In an emergency"
+            hint={isElder
               ? "If you press SOS, we call these people in this order until someone answers."
               : "We call these in order until someone answers. Anyone without a number is skipped."}
-          </AppText>
+          />
 
           {chain.length === 0 && (
             <AppText style={styles.empty} testID="chain-empty">
@@ -170,8 +170,7 @@ export default function CareContacts() {
             <AppText style={styles.addText}>Add a neighbour or friend</AppText>
           </Pressable>
 
-          <AppText style={[styles.section, { marginTop: 30 }]}>Doctors &amp; clinics</AppText>
-          <AppText style={styles.sectionSub}>Numbers we can ring to arrange an appointment.</AppText>
+          <SectionHeader title="Doctors &amp; clinics" hint="Numbers we can ring to arrange an appointment." />
 
           {doctors.length === 0 && (
             <AppText style={styles.empty} testID="doctors-empty">
@@ -181,7 +180,7 @@ export default function CareContacts() {
 
           {doctors.map((d) => (
             <View key={d.id} style={styles.row} testID={`doctor-${d.id}`}>
-              <View style={styles.docIcon}><Ionicons name="medkit" size={20} color={theme.colors.brand} /></View>
+              <IconWell icon="medkit" size={38} />
               <View style={{ flex: 1 }}>
                 <AppText style={styles.rowName}>{d.name}</AppText>
                 <AppText style={styles.rowMeta}>
@@ -238,15 +237,8 @@ export default function CareContacts() {
 
             {error ? <AppText style={styles.err} accessibilityRole="alert">{error}</AppText> : null}
 
-            <GradientButton tone="brand" style={[styles.saveBtn, (!canSave || busy) && { opacity: 0.5 }]}
-              disabled={!canSave || busy} onPress={save} testID="save-entry"
-              accessibilityRole="button" accessibilityLabel="Save">
-              <AppText style={styles.saveText}>{busy ? "Saving…" : "Save"}</AppText>
-            </GradientButton>
-            <Pressable style={styles.cancelBtn} onPress={() => setEditing(null)} disabled={busy}
-              testID="cancel-entry" accessibilityRole="button" accessibilityLabel="Cancel">
-              <AppText style={styles.cancelText}>Cancel</AppText>
-            </Pressable>
+            <Button label="Save" onPress={save} busy={busy} disabled={!canSave} testID="save-entry" />
+            <Button label="Cancel" variant="quiet" onPress={() => setEditing(null)} disabled={busy} testID="cancel-entry" />
           </View>
         </View>
       )}
@@ -314,8 +306,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 14, minHeight: 54,
   },
   err: { fontSize: theme.font.sm, color: theme.colors.error, fontWeight: "700" },
-  saveBtn: { borderRadius: theme.radius.pill, paddingVertical: 17, alignItems: "center", minHeight: 58, marginTop: 4 },
-  saveText: { color: "#fff", fontSize: theme.font.md, fontWeight: "800" },
-  cancelBtn: { alignItems: "center", paddingVertical: 12, minHeight: 48, justifyContent: "center" },
-  cancelText: { fontSize: theme.font.base, fontWeight: "700", color: theme.colors.muted },
 });
