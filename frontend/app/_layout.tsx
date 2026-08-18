@@ -8,6 +8,7 @@ import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
+import { useAppFonts } from "@/src/fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
 import { FeatureProvider, useFeatures, landingRoute } from "@/src/features";
 import { TextScaleProvider } from "@/src/text-scale";
@@ -79,7 +80,14 @@ function RootNavigator() {
 }
 
 export default function RootLayout() {
-  const [loaded, error] = useIconFonts();
+  const [iconsLoaded, iconError] = useIconFonts();
+  const [textLoaded, textError] = useAppFonts();
+
+  // Hold the splash until the typeface is there too. Rendering first would show
+  // every screen in the system font and then reflow it, which on a screen full
+  // of medicine names is a visible jolt rather than a subtle one.
+  const loaded = iconsLoaded && textLoaded;
+  const error = iconError || textError;
 
   useEffect(() => {
     if (loaded || error) SplashScreen.hideAsync();
