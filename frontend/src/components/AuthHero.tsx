@@ -101,7 +101,7 @@ const styles = StyleSheet.create({
   iconWell: {
     width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center",
     backgroundColor: theme.colors.surface, overflow: "hidden",
-    shadowColor: "#3A5A1E", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+    shadowColor: "#0E5A4E", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   iconPhoto: { width: "100%", height: "100%" },
   title: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },

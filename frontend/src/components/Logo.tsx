@@ -49,7 +49,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
     overflow: "hidden",
-    shadowColor: "#5E8F35",
+    shadowColor: "#0E7C6B",
     shadowOpacity: 0.35,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
   },
   sun: {
     // A soft cast so the white sun reads against the brightest part of the sweep.
-    textShadowColor: "rgba(50,84,22,0.38)",
+    textShadowColor: "rgba(10,72,63,0.34)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
