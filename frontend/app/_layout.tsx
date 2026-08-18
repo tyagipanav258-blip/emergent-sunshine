@@ -9,6 +9,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider, useAuth } from "@/src/auth";
+import { FeatureProvider, useFeatures, landingRoute } from "@/src/features";
 import { TextScaleProvider } from "@/src/text-scale";
 import { theme } from "@/src/theme";
 
@@ -17,27 +18,41 @@ SplashScreen.preventAutoHideAsync();
 
 function RootNavigator() {
   const { user, loading } = useAuth();
+  const { features, loading: featuresLoading } = useFeatures();
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
-    if (loading) return;
+    // Settings decide both whether an elder still owes us onboarding and which
+    // tab their app opens on, so routing waits for them rather than flashing
+    // Home first and correcting itself a moment later.
+    if (loading || featuresLoading) return;
     const seg0 = segments[0];
     // `join` is the invite deep link; a signed-out visitor must reach it with
     // the family code intact rather than being bounced to the role picker.
     const inAuth = seg0 === "(auth)" || seg0 === "join";
+    const inOnboarding = seg0 === "(onboarding)";
+    const needsOnboarding = user?.role === "elder" && !features.onboarding_complete;
+
     if (!user && !inAuth) {
       router.replace("/(auth)/role");
+    } else if (user && needsOnboarding && !inOnboarding) {
+      router.replace("/(onboarding)/features");
+    } else if (user && !needsOnboarding && inOnboarding) {
+      // Finished (or a family account that never had onboarding to do).
+      router.replace(user.role === "elder" ? (landingRoute(features) as any) : "/(child)");
     } else if (user && (inAuth || seg0 === undefined)) {
-      router.replace(user.role === "elder" ? "/(elder)" : "/(child)");
+      // The elder's chosen tab opens first; `landingRoute` falls back to Home if
+      // that tab has since been switched off.
+      router.replace(user.role === "elder" ? (landingRoute(features) as any) : "/(child)");
     } else if (user && seg0 === "(child)" && user.role === "elder") {
       router.replace("/(elder)");
     } else if (user && seg0 === "(elder)" && user.role === "child") {
       router.replace("/(child)");
     }
-  }, [user, loading, segments, router]);
+  }, [user, loading, features, featuresLoading, segments, router]);
 
-  if (loading) {
+  if (loading || featuresLoading) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.surface }}>
         <ActivityIndicator size="large" color={theme.colors.brand} />
@@ -50,11 +65,14 @@ function RootNavigator() {
       <Stack.Screen name="index" />
       <Stack.Screen name="join" />
       <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(onboarding)" />
       <Stack.Screen name="(elder)" />
       <Stack.Screen name="(child)" />
       <Stack.Screen name="call" options={{ presentation: "fullScreenModal", animation: "fade" }} />
       <Stack.Screen name="assistant" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
       <Stack.Screen name="notifications" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
+      <Stack.Screen name="my-app-settings" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="manage-app" options={{ animation: "slide_from_right" }} />
       <Stack.Screen name="family/[id]" options={{ animation: "slide_from_right" }} />
     </Stack>
   );
@@ -77,7 +95,9 @@ export default function RootLayout() {
             <StatusBar barStyle="dark-content" />
             <TextScaleProvider>
               <AuthProvider>
-                <RootNavigator />
+                <FeatureProvider>
+                  <RootNavigator />
+                </FeatureProvider>
               </AuthProvider>
             </TextScaleProvider>
           </BottomSheetModalProvider>

@@ -443,7 +443,9 @@ async def child_signup(b: ChildSignup):
             await _seed_demo(await db.users.find_one({"id": elder["id"]}, {"_id": 0}))
         except Exception:
             logger.exception("demo seeding failed for child %s", u["id"])
-    return {"access_token": make_token(u["id"], "child"), "user": public_user(u), "demo": DEMO_MODE}
+    # Carry the parent's name in the signup response too. Without it the app has
+    # to wait for a reload before it can say whose app it is managing.
+    return {"access_token": make_token(u["id"], "child"), "user": {**public_user(u), "elder_name": elder["name"]}, "demo": DEMO_MODE}
 
 
 @api.post("/auth/child/login")
@@ -451,7 +453,11 @@ async def child_login(b: ChildLogin):
     u = await db.users.find_one({"role": "child", "email": b.email.lower().strip()})
     if not u or not pwd.verify(b.password, u["secret_hash"]):
         raise HTTPException(401, "Wrong email or password")
-    return {"access_token": make_token(u["id"], "child"), "user": public_user(u)}
+    elder = await db.users.find_one({"id": u.get("elder_id")}, {"_id": 0})
+    return {
+        "access_token": make_token(u["id"], "child"),
+        "user": {**public_user(u), "elder_name": elder["name"] if elder else None},
+    }
 
 
 @api.get("/auth/me")
@@ -991,6 +997,180 @@ async def shared_videos(u: dict = Depends(current_user)):
         view["shared_at"] = s["created_at"]
         out.append(view)
     return out
+
+
+# ============================ FEATURE SETTINGS ============================
+# What an elder chose to have on their app: which optional parts of the app are
+# there at all, which reel subjects they care about, and which tab opens first.
+#
+# Deliberately absent from this whole system: SOS, Ask Sunshine, "I'm Okay" and
+# calling family. Those are safety and connection — never a preference, never
+# switchable off, by the elder or anyone else.
+#
+# Written first by the elder during first-run onboarding (the one time they own
+# these flags outright), and afterwards by either side: the elder from their own
+# settings, or a linked family member who is helping them.
+
+LANDING_TABS = ("home", "health", "watch", "profile")
+
+# Reel subjects an elder can pick from — the catalogue list without "All", which
+# is a way of looking rather than a thing to look at.
+WATCH_CATEGORY_CHOICES = [c for c in CONTENT_CATEGORIES if c != "All"]
+
+FEATURE_FLAGS = (
+    "watch_tab_enabled",
+    "concierge_tab_enabled",
+    "prescription_scan_enabled",
+    "medicine_explainer_enabled",
+    "appointments_enabled",
+)
+
+
+def _default_features(elder_id: str) -> dict:
+    """Everything on. An elder who never finishes onboarding still gets the whole
+    app, rather than an app that quietly withheld half of itself."""
+    return {
+        "elder_id": elder_id,
+        **{f: True for f in FEATURE_FLAGS},
+        "watch_categories": list(WATCH_CATEGORY_CHOICES),
+        "preferred_landing_tab": "home",
+        "onboarding_complete": False,
+    }
+
+
+def _features_view(doc: dict) -> dict:
+    """Normalise a stored document into the shape both apps read.
+
+    Two rules are enforced on the way out rather than trusted from storage, so a
+    document written by an older build — or by the family disabling Watch after
+    the elder had chosen to land on it — can never strand the elder on a tab that
+    is no longer there:
+      * an unknown landing tab falls back to Home
+      * landing on Watch with Watch switched off falls back to Home
+    """
+    out = {k: doc.get(k, True) for k in FEATURE_FLAGS}
+    cats = [c for c in (doc.get("watch_categories") or WATCH_CATEGORY_CHOICES) if c in WATCH_CATEGORY_CHOICES]
+    landing = doc.get("preferred_landing_tab") or "home"
+    if landing not in LANDING_TABS or (landing == "watch" and not out["watch_tab_enabled"]):
+        landing = "home"
+    out["watch_categories"] = cats or list(WATCH_CATEGORY_CHOICES)
+    out["preferred_landing_tab"] = landing
+    out["onboarding_complete"] = bool(doc.get("onboarding_complete"))
+    return out
+
+
+async def _get_features(elder_id: str) -> dict:
+    doc = await db.feature_settings.find_one({"elder_id": elder_id}, {"_id": 0})
+    return _features_view(doc or _default_features(elder_id))
+
+
+async def _write_features(elder_id: str, patch: dict, by: dict) -> dict:
+    """Upsert, so the document is created the first time anybody writes it."""
+    patch = {
+        **patch,
+        "elder_id": elder_id,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_by": by["id"],
+        "updated_by_role": by["role"],
+    }
+    await db.feature_settings.update_one(
+        {"elder_id": elder_id},
+        {"$set": patch, "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return await _get_features(elder_id)
+
+
+class FeaturesIn(BaseModel):
+    """Every field optional, so a caller can change one toggle without having to
+    resend the elder's whole configuration."""
+    watch_tab_enabled: Optional[bool] = None
+    concierge_tab_enabled: Optional[bool] = None
+    prescription_scan_enabled: Optional[bool] = None
+    medicine_explainer_enabled: Optional[bool] = None
+    appointments_enabled: Optional[bool] = None
+    watch_categories: Optional[List[str]] = None
+    preferred_landing_tab: Optional[str] = None
+
+
+class OnboardingIn(BaseModel):
+    """First-run answers. Defaults match the pre-ticked boxes, so "Use everything"
+    is the same request with nothing changed."""
+    watch_tab_enabled: bool = True
+    concierge_tab_enabled: bool = True
+    prescription_scan_enabled: bool = True
+    medicine_explainer_enabled: bool = True
+    appointments_enabled: bool = True
+    watch_categories: Optional[List[str]] = None
+    preferred_landing_tab: str = "home"
+
+
+def _clean_features_patch(b: FeaturesIn) -> dict:
+    patch = {k: v for k, v in b.model_dump(exclude_none=True).items()}
+    if "watch_categories" in patch:
+        picked = [c for c in patch["watch_categories"] if c in WATCH_CATEGORY_CHOICES]
+        if not picked:
+            raise HTTPException(422, "Please keep at least one kind of video")
+        patch["watch_categories"] = picked
+    if "preferred_landing_tab" in patch and patch["preferred_landing_tab"] not in LANDING_TABS:
+        raise HTTPException(422, "That is not a screen the app can open on")
+    return patch
+
+
+@api.get("/features")
+async def get_features(u: dict = Depends(current_user)):
+    """Read by both apps: the elder's own settings, or the linked elder's."""
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    return await _get_features(eid)
+
+
+@api.post("/elder/onboarding-preferences")
+async def elder_onboarding_preferences(b: OnboardingIn, u: dict = Depends(require_role("elder"))):
+    """The one place an elder writes their own feature settings.
+
+    Safe to call more than once — it overwrites — because a first run that is
+    interrupted and restarted should end somewhere predictable rather than
+    erroring on the second attempt.
+    """
+    cats = b.watch_categories if b.watch_categories is not None else list(WATCH_CATEGORY_CHOICES)
+    picked = [c for c in cats if c in WATCH_CATEGORY_CHOICES]
+    if b.watch_tab_enabled and not picked:
+        raise HTTPException(422, "Please keep at least one kind of video")
+    landing = b.preferred_landing_tab
+    if landing not in LANDING_TABS:
+        raise HTTPException(422, "That is not a screen the app can open on")
+    return await _write_features(u["id"], {
+        **{f: getattr(b, f) for f in FEATURE_FLAGS},
+        "watch_categories": picked or list(WATCH_CATEGORY_CHOICES),
+        "preferred_landing_tab": landing,
+        "onboarding_complete": True,
+    }, u)
+
+
+@api.put("/elder/features")
+async def update_own_features(b: FeaturesIn, u: dict = Depends(require_role("elder"))):
+    """Later edits from the elder's own settings screen."""
+    return await _write_features(u["id"], _clean_features_patch(b), u)
+
+
+@api.get("/family/elder-features")
+async def get_elder_features(u: dict = Depends(require_role("child"))):
+    eid = u.get("elder_id")
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    return await _get_features(eid)
+
+
+@api.put("/family/elder-features")
+async def update_elder_features(b: FeaturesIn, u: dict = Depends(require_role("child"))):
+    """A family member managing the app on the elder's behalf — for the elders
+    who would rather someone else did this for them."""
+    eid = u.get("elder_id")
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    return await _write_features(eid, _clean_features_patch(b), u)
 
 
 # ============================ HEALTH ============================

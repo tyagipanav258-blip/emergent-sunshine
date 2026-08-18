@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, StyleSheet, FlatList, Dimensions, Pressable, ScrollView, ActivityIndicator, ViewToken, Platform } from "react-native";
 import { AppText } from "@/src/components/AppText";
 import { Image } from "expo-image";
@@ -11,11 +11,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, logActivity } from "@/src/api";
 import { CommentSheet } from "@/src/components/CommentSheet";
 import { ReactionSheet } from "@/src/components/ReactionSheet";
+import { useFeatures } from "@/src/features";
 import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
-const CATS = ["All", "Spiritual", "Bhajans", "Songs", "Devotional", "Exercise", "Yoga", "Recipes", "Travel"];
 
 type Reel = {
   id: string; creator: string; creator_avatar: string; title: string; description: string;
@@ -34,6 +34,12 @@ export default function ElderContent() {
   const [commentFor, setCommentFor] = useState<Reel | null>(null);
   const [toast, setToast] = useState("");
   const { setChromeSuppressed } = useScrollChrome();
+  const { features } = useFeatures();
+
+  // Only the subjects the elder asked for, with "All" meaning all of *those*.
+  // Memoised so the chip list keeps a stable identity between renders — the
+  // effect below watches it, and a fresh array every render would re-run it.
+  const CATS = useMemo(() => ["All", ...features.watch_categories], [features.watch_categories]);
 
   // Hide the floating assistant/SOS buttons whenever a reaction or comment
   // sheet is open, so a tap on the sheet never lands on the FAB behind it.
@@ -52,13 +58,19 @@ export default function ElderContent() {
     setLoading(true);
     try {
       const url = c === "All" ? "/content" : `/content?category=${c}`;
-      setReels(await apiFetch<Reel[]>(url));
+      const all = await apiFetch<Reel[]>(url);
+      // "All" is the whole catalogue, so the elder's chosen subjects are applied
+      // here — otherwise unticking a subject would still leave it in this feed.
+      setReels(c === "All" ? all.filter((r) => features.watch_categories.includes(r.category)) : all);
       setActive(0);
     } catch {}
     setLoading(false);
-  }, []);
+  }, [features.watch_categories]);
 
   useEffect(() => { logActivity("Watch"); }, []);
+  // A subject the family switched off while it was the active chip would
+  // otherwise leave the elder staring at an empty feed they can't get out of.
+  useEffect(() => { if (!CATS.includes(cat)) setCat("All"); }, [CATS, cat]);
   useEffect(() => { load(cat); }, [cat, load]);
 
   useEffect(() => {

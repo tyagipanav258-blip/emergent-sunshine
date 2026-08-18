@@ -181,6 +181,26 @@ export default function ElderProfile() {
             </View>
           )}
 
+        {/* What's on the app — the same choices first run asked for. */}
+        <AppText style={styles.section}>What&apos;s on my app</AppText>
+        <Pressable
+          style={styles.linkRow}
+          onPress={() => {
+            if (Platform.OS !== "web") Haptics.selectionAsync();
+            router.push("/my-app-settings");
+          }}
+          testID="open-my-app-settings"
+          accessibilityRole="button"
+          accessibilityLabel="What's on my app. Choose which parts of Sunshine you want and where it opens."
+        >
+          <View style={styles.linkIcon}><Ionicons name="options" size={22} color={theme.colors.brand} /></View>
+          <View style={{ flex: 1 }}>
+            <AppText style={styles.linkLabel}>Choose what you want</AppText>
+            <AppText style={styles.linkSub}>Videos, requests, scanning — and where the app opens</AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color={theme.colors.muted} />
+        </Pressable>
+
         {/* Alerts */}
         <AppText style={styles.section}>Alerts on this phone</AppText>
         <AlertSettings />
@@ -362,6 +382,13 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 13, fontWeight: "800" },
   taskDetail: { fontSize: 15, color: theme.colors.onSurfaceSecondary, lineHeight: 21 },
   toggleCard: { marginHorizontal: 20, backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, paddingHorizontal: 16, borderWidth: 1, borderColor: theme.colors.border },
+  linkRow: {
+    flexDirection: "row", alignItems: "center", gap: 14, marginHorizontal: 20, padding: 16, minHeight: 76,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  linkIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
+  linkLabel: { fontSize: 18, fontWeight: "800", color: theme.colors.onSurface },
+  linkSub: { fontSize: 15, color: theme.colors.muted, marginTop: 2, lineHeight: 21 },
   toggleRow: { flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 16 },
   toggleIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.colors.brandLight, alignItems: "center", justifyContent: "center" },
   toggleLabel: { flex: 1, fontSize: 18, fontWeight: "700", color: theme.colors.onSurface },

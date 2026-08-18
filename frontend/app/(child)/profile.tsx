@@ -43,6 +43,7 @@ export default function ChildProfile() {
 
         <View style={styles.rows}>
           {[
+            { icon: "options", label: user?.elder_name ? `Manage ${user.elder_name}'s app` : "Manage their app", sub: "What they see, and where it opens", go: "/manage-app" },
             { icon: "notifications", label: "Alerts & notifications", sub: "SOS, low medicine, missed doses", go: "/notifications" },
             { icon: "card", label: "Requests & payments", sub: "What Sunshine arranged and what is owed", go: "/(child)/tasks" },
             { icon: "images", label: "Photos & voice notes", sub: "Everything shared in your family", go: "family" },

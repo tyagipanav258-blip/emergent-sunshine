@@ -9,6 +9,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch } from "@/src/api";
 import { usePush } from "@/src/hooks/use-push";
+import { useFeatures } from "@/src/features";
 import { ScrollChromeProvider, useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
@@ -46,6 +47,7 @@ function ElderTabs() {
   const router = useRouter();
   const [sos, setSos] = useState<SosState>({ stage: "closed" });
   const { chromeVisible } = useScrollChrome();
+  const { features } = useFeatures();
   // Claims this phone for alerts and routes whatever the elder taps on.
   usePush();
 
@@ -87,7 +89,12 @@ function ElderTabs() {
           // over the screen, so they can never cover a medicine or a status.
           <View style={[styles.chrome, { paddingBottom: tabBarBottom }]} testID="elder-tabbar">
             <View style={styles.bar}>
-              {TABS.map((tab, index) => {
+              {/* Only the tabs the elder kept. The index is carried alongside
+                  rather than recomputed, because it still has to address the
+                  navigator's own route list, which never shrinks. */}
+              {TABS.map((tab, index) => ({ tab, index }))
+                .filter(({ tab }) => tab.name !== "content" || features.watch_tab_enabled)
+                .map(({ tab, index }) => {
                 const focused = state.index === index;
                 return (
                   <Pressable

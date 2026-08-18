@@ -11,6 +11,7 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { apiFetch, logActivity } from "@/src/api";
 import { useSteps } from "@/src/hooks/use-steps";
+import { useFeatures } from "@/src/features";
 import { useScrollChrome } from "@/src/scroll-context";
 import { medArt } from "@/src/constants/med-art";
 import { theme } from "@/src/theme";
@@ -56,6 +57,7 @@ export default function ElderHealth() {
   const [assign, setAssign] = useState<{ taskId: string; title: string; busy?: boolean; done?: string } | null>(null);
   const [family, setFamily] = useState<{ id: string; name: string }[]>([]);
   const steps = useSteps();
+  const { features } = useFeatures();
 
   const load = useCallback(async () => {
     try {
@@ -311,21 +313,25 @@ export default function ElderHealth() {
           </View>
         ) : meds.length === 0 ? (
           <View style={[styles.intake, styles.intakeCentred]} testID="intake-empty"><GradientFill tone="sunriseSoft" radius={24} />
-            <Ionicons name="camera" size={40} color={theme.colors.marigoldDark} />
+            <Ionicons name={features.prescription_scan_enabled ? "camera" : "medkit"} size={40} color={theme.colors.marigoldDark} />
             <AppText style={styles.intakeQ}>Let&apos;s add your medicines</AppText>
             <AppText style={styles.intakeMeta}>
-              Take a photo of your prescription and we&apos;ll add them for you.
+              {features.prescription_scan_enabled
+                ? "Take a photo of your prescription and we'll add them for you."
+                : "Ask Sunshine to add a medicine, and it will appear here."}
             </AppText>
-            <Pressable
-              style={[styles.intakeBtn, styles.intakeYes, { alignSelf: "stretch", marginTop: 14 }]}
-              onPress={() => setOcr({ open: true })}
-              testID="empty-scan"
-              accessibilityRole="button"
-              accessibilityLabel="Scan a prescription to add your medicines"
-            >
-              <Ionicons name="camera" size={26} color="#fff" />
-              <AppText style={styles.intakeYesText}>Scan my prescription</AppText>
-            </Pressable>
+            {features.prescription_scan_enabled && (
+              <Pressable
+                style={[styles.intakeBtn, styles.intakeYes, { alignSelf: "stretch", marginTop: 14 }]}
+                onPress={() => setOcr({ open: true })}
+                testID="empty-scan"
+                accessibilityRole="button"
+                accessibilityLabel="Scan a prescription to add your medicines"
+              >
+                <Ionicons name="camera" size={26} color="#fff" />
+                <AppText style={styles.intakeYesText}>Scan my prescription</AppText>
+              </Pressable>
+            )}
           </View>
         ) : (
           <View style={[styles.intake, styles.intakeCentred]} testID="intake-done"><GradientFill tone="sunriseSoft" radius={24} />
@@ -338,17 +344,19 @@ export default function ElderHealth() {
         {/* Medicines list */}
         <View style={styles.sectionRow}>
           <AppText style={styles.sectionInRow}>My Medicines</AppText>
-          <Pressable
-            style={styles.scanBtn}
-            onPress={() => setOcr({ open: true })}
-            testID="scan-prescription"
-            accessibilityRole="button"
-            accessibilityLabel="Scan a prescription"
-            accessibilityHint="Takes a photo of your prescription and adds the medicines for you"
-          >
-            <Ionicons name="camera" size={20} color={theme.colors.brand} />
-            <AppText style={styles.scanText}>Scan</AppText>
-          </Pressable>
+          {features.prescription_scan_enabled && (
+            <Pressable
+              style={styles.scanBtn}
+              onPress={() => setOcr({ open: true })}
+              testID="scan-prescription"
+              accessibilityRole="button"
+              accessibilityLabel="Scan a prescription"
+              accessibilityHint="Takes a photo of your prescription and adds the medicines for you"
+            >
+              <Ionicons name="camera" size={20} color={theme.colors.brand} />
+              <AppText style={styles.scanText}>Scan</AppText>
+            </Pressable>
+          )}
         </View>
         <View style={styles.medList}>
           {meds.map((m) => (
@@ -381,16 +389,18 @@ export default function ElderHealth() {
 
               {/* Row actions sit outside the confirm target so neither is a mis-tap for the other. */}
               <View style={styles.medActions}>
-                <Pressable
-                  style={styles.medAction}
-                  onPress={() => explainMed(m)}
-                  hitSlop={6}
-                  testID={`explain-${m.id}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={`What is ${m.name} for?`}
-                >
-                  <Ionicons name="help-circle-outline" size={26} color={theme.colors.brand} />
-                </Pressable>
+                {features.medicine_explainer_enabled && (
+                  <Pressable
+                    style={styles.medAction}
+                    onPress={() => explainMed(m)}
+                    hitSlop={6}
+                    testID={`explain-${m.id}`}
+                    accessibilityRole="button"
+                    accessibilityLabel={`What is ${m.name} for?`}
+                  >
+                    <Ionicons name="help-circle-outline" size={26} color={theme.colors.brand} />
+                  </Pressable>
+                )}
                 <Pressable
                   style={styles.medAction}
                   onPress={() => { if (Platform.OS !== "web") Haptics.selectionAsync(); setRemove(m); }}
@@ -407,41 +417,51 @@ export default function ElderHealth() {
         </View>
 
         {/* Appointments */}
-        <AppText style={styles.section}>Appointments</AppText>
-        {appts.length === 0 && (
-          <AppText style={styles.sectionEmpty} testID="appts-empty">
-            No appointments yet. Ask Sunshine below to book a doctor for you.
-          </AppText>
+        {features.appointments_enabled && (
+          <>
+            <AppText style={styles.section}>Appointments</AppText>
+            {appts.length === 0 && (
+              <AppText style={styles.sectionEmpty} testID="appts-empty">
+                {features.concierge_tab_enabled
+                  ? "No appointments yet. Ask Sunshine below to book a doctor for you."
+                  : "No appointments yet."}
+              </AppText>
+            )}
+            {appts.map((a) => (
+              <View key={a.id} style={styles.apptCard} testID={`appt-${a.id}`}>
+                <View style={styles.apptIcon}><Ionicons name="calendar" size={26} color={theme.colors.brand} /></View>
+                <View style={{ flex: 1 }}>
+                  <AppText style={styles.apptDoc}>{a.doctor}</AppText>
+                  <AppText style={styles.apptSpec}>{a.specialty}</AppText>
+                  <AppText style={styles.apptTime}>{a.date} • {a.time}</AppText>
+                </View>
+              </View>
+            ))}
+          </>
         )}
-        {appts.map((a) => (
-          <View key={a.id} style={styles.apptCard} testID={`appt-${a.id}`}>
-            <View style={styles.apptIcon}><Ionicons name="calendar" size={26} color={theme.colors.brand} /></View>
-            <View style={{ flex: 1 }}>
-              <AppText style={styles.apptDoc}>{a.doctor}</AppText>
-              <AppText style={styles.apptSpec}>{a.specialty}</AppText>
-              <AppText style={styles.apptTime}>{a.date} • {a.time}</AppText>
-            </View>
-          </View>
-        ))}
 
         {/* Care actions */}
-        <AppText style={styles.section}>Care & Concierge</AppText>
-        <View style={styles.grid}>
-          <GridBtn image={ICON_REORDER} label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
-          <GridBtn image={ICON_DOCTOR} label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
-          <GridBtn image={ICON_TRANSPORT} label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
-        </View>
-        <Pressable
-          style={styles.askConcierge}
-          onPress={() => setConcierge({ open: true, text: "" })}
-          testID="open-concierge"
-          accessibilityRole="button"
-          accessibilityLabel="Ask Sunshine to arrange something"
-          accessibilityHint="Sends a request to your family to arrange it for you"
-        >
-          <Ionicons name="sparkles" size={22} color={theme.colors.marigoldDark} />
-          <AppText style={styles.askConciergeText}>Ask Sunshine to arrange something</AppText>
-        </Pressable>
+        {features.concierge_tab_enabled && (
+          <>
+            <AppText style={styles.section}>Care & Concierge</AppText>
+            <View style={styles.grid}>
+              <GridBtn image={ICON_REORDER} label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
+              <GridBtn image={ICON_DOCTOR} label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
+              <GridBtn image={ICON_TRANSPORT} label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
+            </View>
+            <Pressable
+              style={styles.askConcierge}
+              onPress={() => setConcierge({ open: true, text: "" })}
+              testID="open-concierge"
+              accessibilityRole="button"
+              accessibilityLabel="Ask Sunshine to arrange something"
+              accessibilityHint="Sends a request to your family to arrange it for you"
+            >
+              <Ionicons name="sparkles" size={22} color={theme.colors.marigoldDark} />
+              <AppText style={styles.askConciergeText}>Ask Sunshine to arrange something</AppText>
+            </Pressable>
+          </>
+        )}
       </ScrollView>
 
       {/* OCR sheet */}
