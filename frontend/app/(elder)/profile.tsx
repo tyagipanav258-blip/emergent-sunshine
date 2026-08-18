@@ -201,6 +201,25 @@ export default function ElderProfile() {
           <Ionicons name="chevron-forward" size={22} color={theme.colors.muted} />
         </Pressable>
 
+        {/* Who comes if she presses the button — reassurance, mainly. */}
+        <Pressable
+          style={[styles.linkRow, { marginTop: 12 }]}
+          onPress={() => {
+            if (Platform.OS !== "web") Haptics.selectionAsync();
+            router.push("/care-contacts");
+          }}
+          testID="open-care-contacts"
+          accessibilityRole="button"
+          accessibilityLabel="Who we can call. See who we ring if you press SOS."
+        >
+          <View style={styles.linkIcon}><Ionicons name="call" size={22} color={theme.colors.brand} /></View>
+          <View style={{ flex: 1 }}>
+            <AppText style={styles.linkLabel}>Who we can call</AppText>
+            <AppText style={styles.linkSub}>Who we ring if you press SOS, and your doctors</AppText>
+          </View>
+          <Ionicons name="chevron-forward" size={22} color={theme.colors.muted} />
+        </Pressable>
+
         {/* Alerts */}
         <AppText style={styles.section}>Alerts on this phone</AppText>
         <AlertSettings />

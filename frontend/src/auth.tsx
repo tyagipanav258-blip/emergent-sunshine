@@ -25,6 +25,8 @@ type AuthState = {
   signInChild: (email: string, password: string) => Promise<void>;
   signUpChild: (name: string, email: string, password: string, family_code: string, phone?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Edit your own name or phone. The phone is what an emergency call dials. */
+  updateProfile: (patch: { name?: string; phone?: string }) => Promise<User>;
 };
 
 const AuthContext = createContext<AuthState>({} as AuthState);
@@ -89,6 +91,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     await afterAuth(res);
   };
+  const updateProfile = async (patch: { name?: string; phone?: string }) => {
+    const me = await apiFetch<User>("/auth/me", { method: "PUT", body: patch });
+    // Keep whatever the signup response carried that /auth/me does not return,
+    // such as the linked parent's name.
+    setUser((prev) => ({ ...(prev || {} as User), ...me }));
+    return me;
+  };
+
   const signOut = async () => {
     // Release the phone first: a handed-back handset must stop receiving this
     // account's medicine reminders and emergency alerts.
@@ -98,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInElder, signUpElder, signInChild, signUpChild, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signInElder, signUpElder, signInChild, signUpChild, signOut, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );

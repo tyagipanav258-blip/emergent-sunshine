@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Tabs, useRouter } from "expo-router";
 import { View, Pressable, StyleSheet, Platform, ActivityIndicator, Linking } from "react-native";
 import { AppText } from "@/src/components/AppText";
@@ -26,6 +26,23 @@ type SosResult = {
   message: string;
   contacts_notified: string[];
   emergency_number?: string;
+  run_id?: string | null;
+};
+
+/** Live state of the calls going out, so the wait is visible rather than blank. */
+type SosRun = {
+  state: "calling" | "acknowledged" | "exhausted";
+  acknowledged_by?: string | null;
+  calling?: string | null;
+  attempts: { name: string; outcome: string }[];
+};
+
+const OUTCOME_TEXT: Record<string, string> = {
+  ringing: "calling…",
+  no_answer: "no answer",
+  voicemail: "went to voicemail",
+  failed: "could not be reached",
+  acknowledged: "answered",
 };
 
 type SosState =
@@ -46,8 +63,36 @@ function ElderTabs() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [sos, setSos] = useState<SosState>({ stage: "closed" });
+  const [run, setRun] = useState<SosRun | null>(null);
+  const runId = sos.stage === "done" ? sos.result.run_id : null;
   const { chromeVisible } = useScrollChrome();
   const { features } = useFeatures();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Follow the calls while they go out. Watching "calling Priya… no answer…
+  // Rahul is coming" is the difference between waiting and wondering.
+  useEffect(() => {
+    if (!runId) { setRun(null); return; }
+    let stop = false;
+    const tick = async () => {
+      try {
+        const r = await apiFetch<SosRun>(`/sos/runs/${runId}`);
+        if (stop) return;
+        setRun(r);
+        if (r.state !== "calling" && pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      } catch {}
+    };
+    tick();
+    pollRef.current = setInterval(tick, 3000);
+    return () => {
+      stop = true;
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+    };
+  }, [runId]);
   // Claims this phone for alerts and routes whatever the elder taps on.
   usePush();
 
@@ -218,7 +263,43 @@ function ElderTabs() {
                 </AppText>
                 <AppText style={styles.sheetSub}>{sos.result.message}</AppText>
 
-                {sos.result.contacts_notified.length > 0 && (
+                {/* The calls, as they happen. */}
+                {run && (
+                  <View style={styles.contacts} testID="sos-progress">
+                    {run.attempts.map((a, i) => (
+                      <View key={`${a.name}-${i}`} style={styles.contactRow}>
+                        <Ionicons
+                          name={a.outcome === "acknowledged" ? "checkmark-circle"
+                            : a.outcome === "ringing" ? "call" : "close-circle"}
+                          size={22}
+                          color={a.outcome === "acknowledged" ? theme.colors.success
+                            : a.outcome === "ringing" ? theme.colors.brand : theme.colors.muted}
+                        />
+                        <AppText style={styles.contactText}>
+                          {a.name} — {OUTCOME_TEXT[a.outcome] || a.outcome}
+                        </AppText>
+                      </View>
+                    ))}
+                    {run.state === "calling" && run.calling && (
+                      <View style={styles.contactRow}>
+                        <ActivityIndicator color={theme.colors.brand} />
+                        <AppText style={styles.contactText}>Calling {run.calling}…</AppText>
+                      </View>
+                    )}
+                    {run.state === "acknowledged" && (
+                      <AppText style={styles.comingText} accessibilityLiveRegion="assertive">
+                        {run.acknowledged_by} is coming to help you.
+                      </AppText>
+                    )}
+                    {run.state === "exhausted" && (
+                      <AppText style={styles.noneText} accessibilityLiveRegion="assertive">
+                        Nobody answered. Please call for help using the button below.
+                      </AppText>
+                    )}
+                  </View>
+                )}
+
+                {!run && sos.result.contacts_notified.length > 0 && (
                   <View style={styles.contacts}>
                     {sos.result.contacts_notified.map((c) => (
                       <View key={c} style={styles.contactRow}>
@@ -287,7 +368,9 @@ const styles = StyleSheet.create({
   sheetSub: { fontSize: theme.font.base, color: theme.colors.onSurfaceSecondary, textAlign: "center", lineHeight: 24 },
   contacts: { alignSelf: "stretch", backgroundColor: theme.colors.surfaceSecondary, borderRadius: 20, padding: 16, gap: 10, marginTop: 4 },
   contactRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  contactText: { fontSize: theme.font.base, fontWeight: "600", color: theme.colors.onSurface },
+  contactText: { fontSize: theme.font.base, fontWeight: "600", color: theme.colors.onSurface, flex: 1 },
+  comingText: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.success, marginTop: 4 },
+  noneText: { fontSize: theme.font.base, fontWeight: "700", color: theme.colors.error, marginTop: 4, lineHeight: 24 },
   confirmBtn: { alignSelf: "stretch", backgroundColor: theme.colors.error, borderRadius: theme.radius.pill, paddingVertical: 18, alignItems: "center", marginTop: 8, minHeight: 60 },
   confirmBtnText: { color: "#fff", fontSize: theme.font.md, fontWeight: "800" },
   cancelBtn: { alignSelf: "stretch", backgroundColor: theme.colors.surfaceTertiary, borderRadius: theme.radius.pill, paddingVertical: 18, alignItems: "center", minHeight: 60 },

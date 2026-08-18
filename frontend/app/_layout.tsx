@@ -73,6 +73,7 @@ function RootNavigator() {
       <Stack.Screen name="assistant" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
       <Stack.Screen name="notifications" options={{ presentation: "modal", animation: "slide_from_bottom" }} />
       <Stack.Screen name="my-app-settings" options={{ animation: "slide_from_right" }} />
+      <Stack.Screen name="care-contacts" options={{ animation: "slide_from_right" }} />
       <Stack.Screen name="manage-app" options={{ animation: "slide_from_right" }} />
       <Stack.Screen name="family/[id]" options={{ animation: "slide_from_right" }} />
     </Stack>

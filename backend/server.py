@@ -1269,22 +1269,24 @@ async def _escalation_chain(elder_id: str) -> List[dict]:
     the family arranged them. Anyone without a number is skipped rather than
     silently occupying a place in the chain.
     """
-    out: List[dict] = []
+    manual: List[dict] = []
     seen: set = set()
     for c in await db.contacts.find({"elder_id": elder_id}, {"_id": 0}).sort("order", 1).to_list(50):
         if c.get("phone"):
-            out.append(_contact_view(c))
+            manual.append(_contact_view(c))
             if c.get("user_id"):
                 seen.add(c["user_id"])
-    # Family who joined but were never explicitly arranged still belong in the
-    # chain; they go after whatever order was set by hand.
+    # Family lead by default. Ringing the neighbour before her own daughter
+    # would be the wrong call to make on somebody's behalf, so anyone who joined
+    # with the family code goes to the front until the order is set by hand.
+    family: List[dict] = []
     for m in await db.users.find({"role": "child", "elder_id": elder_id}, {"_id": 0}).to_list(20):
         if m.get("phone") and m["id"] not in seen:
-            out.append({
+            family.append({
                 "id": f"user:{m['id']}", "name": m.get("name"), "phone": m.get("phone"),
-                "relation": m.get("relation") or "Family", "order": 999, "user_id": m["id"],
+                "relation": m.get("relation") or "Family", "order": -1, "user_id": m["id"],
             })
-    return out
+    return family + manual
 
 
 @api.get("/contacts")
