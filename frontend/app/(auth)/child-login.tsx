@@ -25,6 +25,7 @@ export default function ChildLogin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [phone, setPhone] = useState("");
   const [familyCode, setFamilyCode] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,7 +43,7 @@ export default function ChildLogin() {
     setError("");
     try {
       if (mode === "login") await signInChild(email.trim(), password);
-      else await signUpChild(name.trim(), email.trim(), password, familyCode.trim().toUpperCase());
+      else await signUpChild(name.trim(), email.trim(), password, familyCode.trim().toUpperCase(), phone.trim());
     } catch (e: any) {
       setError(e.message || "Please try again");
       setBusy(false);
@@ -85,14 +86,26 @@ export default function ChildLogin() {
             rightIconLabel={showPassword ? "Hide password" : "Show password"}
           />
           {mode === "signup" && (
-            <Field
-              icon="key"
-              value={familyCode}
-              onChangeText={(t: string) => setFamilyCode(t.toUpperCase())}
-              placeholder="Family code, from your parent's profile"
-              autoCapitalize="characters"
-              testID="child-family-code"
-            />
+            <>
+              {/* The number an emergency call reaches them on. Asked here
+                  because the escalation chain is useless without it. */}
+              <Field
+                icon="call"
+                value={phone}
+                onChangeText={setPhone}
+                placeholder="Your phone — we call this in an emergency"
+                keyboardType="phone-pad"
+                testID="child-phone"
+              />
+              <Field
+                icon="key"
+                value={familyCode}
+                onChangeText={(t: string) => setFamilyCode(t.toUpperCase())}
+                placeholder="Family code, from your parent's profile"
+                autoCapitalize="characters"
+                testID="child-family-code"
+              />
+            </>
           )}
 
           {error ? <AppText style={styles.error} testID="child-error" accessibilityLiveRegion="assertive" accessibilityRole="alert">{error}</AppText> : null}

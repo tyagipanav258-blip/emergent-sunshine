@@ -38,7 +38,10 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 # 7 days. A stolen phone shouldn't hand over a health record for a month.
-JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "10080"))
+# A year, not a week. Being signed out is a dead end for someone who may not
+# remember a PIN they chose months ago, and there is nothing here worth the
+# weekly re-login it used to cost her.
+JWT_MINUTES = int(os.environ.get("JWT_EXPIRE_MINUTES", "525600"))
 # Short-lived, purpose-scoped tokens for streamed media (prescription photos,
 # voice notes). Never usable as a session credential.
 MEDIA_TOKEN_MINUTES = 10
@@ -128,6 +131,10 @@ class ChildSignup(BaseModel):
     password: str = Field(min_length=6)
     family_code: str
     relation: Optional[str] = None
+    # The number an emergency call actually reaches them on. Asked at signup
+    # because without it they cannot be in the escalation chain at all, and this
+    # is the one moment they are already at a keyboard.
+    phone: Optional[str] = None
 
 class ChildLogin(BaseModel):
     email: str
@@ -424,6 +431,7 @@ async def child_signup(b: ChildSignup):
         "id": str(uuid.uuid4()), "role": "child", "name": b.name.strip(),
         "email": b.email.lower().strip(), "secret_hash": pwd.hash(b.password),
         "elder_id": elder["id"], "relation": (b.relation or "").strip() or "Family",
+        "phone": norm_phone(b.phone) if b.phone else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.users.insert_one(u.copy())
@@ -1171,6 +1179,189 @@ async def update_elder_features(b: FeaturesIn, u: dict = Depends(require_role("c
     if not eid:
         raise HTTPException(404, "No linked parent account")
     return await _write_features(eid, _clean_features_patch(b), u)
+
+
+# ============================ NUMBERS WE CAN CALL ============================
+# Two lists, both belonging to the elder and both maintained by whoever is
+# helping her — usually a linked family member, though she can edit them too.
+#
+# Neither is asked for at signup. A neighbour willing to be an emergency contact
+# is not something anyone has lined up on the day they install an app, and a
+# clinic's number is not worth blocking the front door over. They fill in over
+# time, and every feature that reads them degrades quietly while they are empty.
+
+
+def _contact_view(c: dict) -> dict:
+    return {
+        "id": c["id"], "name": c.get("name"), "phone": c.get("phone"),
+        "relation": c.get("relation"), "order": c.get("order", 0),
+        "user_id": c.get("user_id"),
+    }
+
+
+def _doctor_view(d: dict) -> dict:
+    return {
+        "id": d["id"], "name": d.get("name"), "specialty": d.get("specialty"),
+        "phone": d.get("phone"), "place": d.get("place"),
+    }
+
+
+class ContactIn(BaseModel):
+    name: str
+    phone: str
+    relation: Optional[str] = None
+
+
+class DoctorIn(BaseModel):
+    name: str
+    phone: str
+    specialty: Optional[str] = None
+    place: Optional[str] = None
+
+
+class ReorderIn(BaseModel):
+    """The escalation order, as a list of contact ids, first to last."""
+    ids: List[str]
+
+
+async def _escalation_chain(elder_id: str) -> List[dict]:
+    """Who to ring, in order, when the SOS button is pressed.
+
+    Linked family members come first and are folded in automatically — anyone
+    who joined with the family code and left a phone number is already willing
+    to be called. Manually added contacts (the neighbour) follow, in the order
+    the family arranged them. Anyone without a number is skipped rather than
+    silently occupying a place in the chain.
+    """
+    out: List[dict] = []
+    seen: set = set()
+    for c in await db.contacts.find({"elder_id": elder_id}, {"_id": 0}).sort("order", 1).to_list(50):
+        if c.get("phone"):
+            out.append(_contact_view(c))
+            if c.get("user_id"):
+                seen.add(c["user_id"])
+    # Family who joined but were never explicitly arranged still belong in the
+    # chain; they go after whatever order was set by hand.
+    for m in await db.users.find({"role": "child", "elder_id": elder_id}, {"_id": 0}).to_list(20):
+        if m.get("phone") and m["id"] not in seen:
+            out.append({
+                "id": f"user:{m['id']}", "name": m.get("name"), "phone": m.get("phone"),
+                "relation": m.get("relation") or "Family", "order": 999, "user_id": m["id"],
+            })
+    return out
+
+
+@api.get("/contacts")
+async def list_contacts(u: dict = Depends(current_user)):
+    """The escalation chain as it would actually be dialled."""
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    return {"chain": await _escalation_chain(eid)}
+
+
+@api.post("/contacts")
+async def add_contact(b: ContactIn, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    phone = norm_phone(b.phone)
+    if not re.fullmatch(r"\+?\d{7,15}", phone):
+        raise HTTPException(422, "Please enter a phone number we can dial")
+    last = await db.contacts.find({"elder_id": eid}, {"_id": 0}).sort("order", -1).to_list(1)
+    doc = {
+        "id": str(uuid.uuid4()), "elder_id": eid, "name": b.name.strip(),
+        "phone": phone, "relation": (b.relation or "").strip() or "Contact",
+        "order": (last[0]["order"] + 1) if last else 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.contacts.insert_one(doc.copy())
+    return _contact_view(doc)
+
+
+@api.put("/contacts/{cid}")
+async def edit_contact(cid: str, b: ContactIn, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    phone = norm_phone(b.phone)
+    if not re.fullmatch(r"\+?\d{7,15}", phone):
+        raise HTTPException(422, "Please enter a phone number we can dial")
+    r = await db.contacts.update_one(
+        {"id": cid, "elder_id": eid},
+        {"$set": {"name": b.name.strip(), "phone": phone, "relation": (b.relation or "").strip() or "Contact"}},
+    )
+    if not r.matched_count:
+        raise HTTPException(404, "Contact not found")
+    return _contact_view(await db.contacts.find_one({"id": cid}, {"_id": 0}))
+
+
+@api.delete("/contacts/{cid}")
+async def delete_contact(cid: str, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    r = await db.contacts.delete_one({"id": cid, "elder_id": eid})
+    if not r.deleted_count:
+        raise HTTPException(404, "Contact not found")
+    return {"ok": True}
+
+
+@api.post("/contacts/order")
+async def reorder_contacts(b: ReorderIn, u: dict = Depends(current_user)):
+    """Who gets rung first is the whole point of this list, so it is explicit."""
+    eid = await elder_id_for(u)
+    for i, cid in enumerate(b.ids):
+        await db.contacts.update_one({"id": cid, "elder_id": eid}, {"$set": {"order": i}})
+    return {"chain": await _escalation_chain(eid)}
+
+
+@api.get("/doctors")
+async def list_doctors(u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    docs = await db.doctors.find({"elder_id": eid}, {"_id": 0}).sort("created_at", 1).to_list(50)
+    return [_doctor_view(d) for d in docs]
+
+
+@api.post("/doctors")
+async def add_doctor(b: DoctorIn, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    if not eid:
+        raise HTTPException(404, "No linked parent account")
+    phone = norm_phone(b.phone)
+    if not re.fullmatch(r"\+?\d{7,15}", phone):
+        raise HTTPException(422, "Please enter a phone number we can dial")
+    doc = {
+        "id": str(uuid.uuid4()), "elder_id": eid, "name": b.name.strip(), "phone": phone,
+        "specialty": (b.specialty or "").strip() or None, "place": (b.place or "").strip() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.doctors.insert_one(doc.copy())
+    return _doctor_view(doc)
+
+
+@api.put("/doctors/{did}")
+async def edit_doctor(did: str, b: DoctorIn, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    phone = norm_phone(b.phone)
+    if not re.fullmatch(r"\+?\d{7,15}", phone):
+        raise HTTPException(422, "Please enter a phone number we can dial")
+    r = await db.doctors.update_one(
+        {"id": did, "elder_id": eid},
+        {"$set": {"name": b.name.strip(), "phone": phone,
+                  "specialty": (b.specialty or "").strip() or None,
+                  "place": (b.place or "").strip() or None}},
+    )
+    if not r.matched_count:
+        raise HTTPException(404, "Doctor not found")
+    return _doctor_view(await db.doctors.find_one({"id": did}, {"_id": 0}))
+
+
+@api.delete("/doctors/{did}")
+async def delete_doctor(did: str, u: dict = Depends(current_user)):
+    eid = await elder_id_for(u)
+    r = await db.doctors.delete_one({"id": did, "elder_id": eid})
+    if not r.deleted_count:
+        raise HTTPException(404, "Doctor not found")
+    return {"ok": True}
 
 
 # ============================ HEALTH ============================

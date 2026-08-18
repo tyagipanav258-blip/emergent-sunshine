@@ -23,7 +23,7 @@ type AuthState = {
   signInElder: (phone: string, pin: string) => Promise<void>;
   signUpElder: (name: string, phone: string, pin: string) => Promise<void>;
   signInChild: (email: string, password: string) => Promise<void>;
-  signUpChild: (name: string, email: string, password: string, family_code: string) => Promise<void>;
+  signUpChild: (name: string, email: string, password: string, family_code: string, phone?: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -82,8 +82,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await apiFetch<any>("/auth/child/login", { method: "POST", auth: false, body: { email, password } });
     await afterAuth(res);
   };
-  const signUpChild = async (name: string, email: string, password: string, family_code: string) => {
-    const res = await apiFetch<any>("/auth/child/signup", { method: "POST", auth: false, body: { name, email, password, family_code } });
+  const signUpChild = async (name: string, email: string, password: string, family_code: string, phone?: string) => {
+    const res = await apiFetch<any>("/auth/child/signup", {
+      method: "POST", auth: false,
+      body: { name, email, password, family_code, phone: phone || null },
+    });
     await afterAuth(res);
   };
   const signOut = async () => {
