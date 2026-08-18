@@ -2197,6 +2197,61 @@ async def voice_ask(b: VoiceAsk, u: dict = Depends(current_user)):
     return {"answer": str(await chat.send_message(UserMessage(text=prompt))).strip()}
 
 
+async def _elder_context(elder: dict) -> str:
+    """A compact snapshot of this elder's own day, for the assistant to answer from.
+
+    Without it the model is fluent about everything and right about nothing: asked
+    when their next appointment is, it will invent a plausible date and say it
+    warmly, which is worse than admitting it does not know.
+
+    Deliberately narrow. Only this elder's rows, only the fields an answer would
+    actually use, and no identifiers — this text goes into a prompt, and health
+    data should travel no further than the question needs.
+    """
+    eid = elder["id"]
+    today = elder_day(elder)
+    lines = [f"Today is {today}. You are speaking with {elder.get('name', 'her')}."]
+
+    try:
+        meds = await _med_views(elder)
+    except Exception:
+        meds = []
+    if meds:
+        lines.append("Her medicines today:")
+        for m in meds:
+            state = "already taken today" if m["taken_today"] else "not taken yet today"
+            stock = f", running low - about {m['days_left']} days left" if m["low"] else ""
+            lines.append(f"- {m['name']} {m['dose']} at {m['time']}, {state}{stock}")
+    else:
+        lines.append("She has no medicines saved yet.")
+
+    appts = await db.appointments.find({"elder_id": eid}, {"_id": 0}).to_list(20)
+    if appts:
+        lines.append("Her upcoming appointments:")
+        for a in appts:
+            lines.append(f"- {a.get('doctor')} ({a.get('specialty')}) on {a.get('date')} at {a.get('time')}, {a.get('place')}")
+    else:
+        lines.append("She has no appointments booked.")
+
+    tasks = await db.tasks.find(
+        {"elder_id": eid, "status": {"$nin": ["done", "declined"]}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(10)
+    if tasks:
+        lines.append("Requests she has open right now:")
+        for t in tasks:
+            lines.append(f"- {t.get('title')} ({t.get('status')})")
+
+    contacts = await _family_contacts(eid)
+    lines.append(
+        "Her family: " + (", ".join(f"{c['name']} ({c['relation']})" for c in contacts) or "nobody connected yet")
+    )
+    lines.append(
+        "Answer questions about the above from these facts only. "
+        "If something is not listed here, say plainly that you do not know and offer to ask her family - never guess a date, a dose or a time."
+    )
+    return "\n".join(lines)
+
+
 ASSISTANT_SYS = (
     "You are Sunshine, a warm, patient assistant for older adults aged 60-80 in India. "
     "Reply in very simple, clear English, short sentences, kind and reassuring, like a caring grandchild. "
@@ -2226,7 +2281,14 @@ async def assistant_chat(b: AssistantChatIn, u: dict = Depends(current_user)):
     hist = await db.assistant_messages.find({"session_id": sid, "user_id": u["id"]}).sort("created_at", 1).to_list(40)
     first_name = (u.get("name") or "They").split(" ")[0]
     ctx = "\n".join([(first_name if m["role"] == "user" else "Sunshine") + ": " + m["text"] for m in hist[-10:]])
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=sid, system_message=ASSISTANT_SYS).with_model(*GEMINI)
+    # The elder's own day travels with the system prompt, so "when is my next
+    # appointment" is answered from her record rather than from imagination.
+    elder = await db.users.find_one({"id": await elder_id_for(u)}, {"_id": 0})
+    facts = await _elder_context(elder) if elder else ""
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY, session_id=sid,
+        system_message=ASSISTANT_SYS + ("\n\nWhat you know about her:\n" + facts if facts else ""),
+    ).with_model(*GEMINI)
     prompt = f"Our chat so far:\n{ctx}\n\nThey now say: {msg}\n\nReply warmly as Sunshine." if ctx else msg
     answer = str(await chat.send_message(UserMessage(text=prompt))).strip()
     action = await _detect_action(await elder_id_for(u), msg)
@@ -2329,9 +2391,12 @@ async def _run_agent(elder: dict, message: str) -> dict:
               "time": None, "med_type": None, "per_day": None, "message": None, "details": None,
               "who": None}
     try:
+        # The same snapshot the chat gets, so a spoken "when do I see the doctor?"
+        # lands on the real date instead of a confident invention.
+        facts = await _elder_context(elder)
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY, session_id=f"agent-{uuid.uuid4()}",
-            system_message=AGENT_SYS + f" Her connected contacts are: {roster}.",
+            system_message=AGENT_SYS + f" Her connected contacts are: {roster}.\n\nWhat you know about her:\n{facts}",
         ).with_model(*AGENT_MODEL)
         raw = str(await chat.send_message(UserMessage(text=message)))
         mm = re.search(r"\{.*\}", raw, re.S)
