@@ -1,10 +1,11 @@
 import React from "react";
 import { View, StyleSheet, Pressable, Platform, ActivityIndicator, StyleProp, ViewStyle } from "react-native";
+import { LinearGradient } from "expo-linear-gradient";
 import { AppText } from "@/src/components/AppText";
 import { GradientFill } from "@/src/components/GradientFill";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { theme } from "@/src/theme";
+import { theme, gradients } from "@/src/theme";
 
 /**
  * The shared surface of the app: card, button, chip, icon well, stat tile.
@@ -21,14 +22,83 @@ type IconName = React.ComponentProps<typeof Ionicons>["name"];
 
 const tap = () => { if (Platform.OS !== "web") Haptics.selectionAsync(); };
 
+/**
+ * The page itself: deep blue at the top falling away to the ordinary ground.
+ *
+ * Render as the first child of a screen's root, behind everything. The depth is
+ * the point — a header sitting on the dark end reads as part of the page rather
+ * than a bar bolted to the top of it, and cards crossing the fade appear to
+ * float rather than sit in a list.
+ */
+export function ScreenGradient({ height = 320 }: { height?: number }) {
+  return (
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.colors.surface }]} pointerEvents="none">
+      <LinearGradient
+        colors={[theme.colors.brandDark, theme.colors.brand, theme.colors.surface]}
+        locations={[0, 0.45, 1]}
+        style={{ height }}
+      />
+    </View>
+  );
+}
+
+/**
+ * The header that sits on the dark end of the gradient — greeting, place, and
+ * one action. White on blue, so it has to carry its own contrast rather than
+ * borrow the page's.
+ */
+export function PageHeader({
+  title, subtitle, icon, onIconPress, iconBadge, avatar, testID, iconLabel,
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: IconName;
+  onIconPress?: () => void;
+  /** A count worth interrupting for; hidden at zero. */
+  iconBadge?: number;
+  avatar?: React.ReactNode;
+  testID?: string;
+  iconLabel?: string;
+}) {
+  return (
+    <View style={styles.pageHead} testID={testID}>
+      {avatar}
+      <View style={{ flex: 1 }}>
+        <AppText style={styles.pageTitle}>{title}</AppText>
+        {subtitle ? <AppText style={styles.pageSub}>{subtitle}</AppText> : null}
+      </View>
+      {icon && onIconPress && (
+        <Pressable
+          onPress={() => { tap(); onIconPress(); }}
+          hitSlop={10}
+          style={styles.headIcon}
+          accessibilityRole="button"
+          accessibilityLabel={iconLabel || "Open"}
+        >
+          <Ionicons name={icon} size={24} color="#fff" />
+          {Boolean(iconBadge) && (
+            <View style={styles.headBadge}>
+              <AppText style={styles.headBadgeText}>{iconBadge! > 9 ? "9+" : iconBadge}</AppText>
+            </View>
+          )}
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 /** The soft-shadowed white surface everything sits on. */
 export function Card({
   children, style, tone = "plain", testID,
 }: {
   children: React.ReactNode;
   style?: StyleProp<ViewStyle>;
-  /** `raised` lifts it off the page; `quiet` recedes into it. */
-  tone?: "plain" | "raised" | "quiet";
+  /**
+   * `raised` lifts it off the page, `quiet` recedes into it, and `frosted` is
+   * for a card sitting on the dark end of the gradient — translucent, so the
+   * colour behind it still reads through.
+   */
+  tone?: "plain" | "raised" | "quiet" | "frosted";
   testID?: string;
 }) {
   return (
@@ -38,6 +108,7 @@ export function Card({
         styles.card,
         tone === "raised" && styles.cardRaised,
         tone === "quiet" && styles.cardQuiet,
+        tone === "frosted" && styles.cardFrosted,
         style,
       ]}
     >
@@ -91,7 +162,7 @@ export function Button({
         style,
       ]}
     >
-      {filled && <GradientFill tone={variant === "danger" ? "danger" : "brand"} radius={theme.radius.md} />}
+      {filled && <GradientFill tone={variant === "danger" ? "danger" : "brand"} radius={theme.radius.pill} />}
       {busy ? (
         <ActivityIndicator color={ink} />
       ) : (
@@ -226,12 +297,37 @@ export function Row({
   );
 }
 
-/** A section heading with optional supporting line. */
-export function SectionHeader({ title, hint }: { title: string; hint?: string }) {
+/**
+ * A section heading, optionally with a supporting line and a trailing link —
+ * the "View Details" on the right that lets a section admit there is more
+ * behind it without spending a whole row saying so.
+ */
+export function SectionHeader({
+  title, hint, actionLabel, onAction, onDark,
+}: {
+  title: string;
+  hint?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  /** Sitting on the dark end of the gradient, so it needs white type. */
+  onDark?: boolean;
+}) {
   return (
     <View style={styles.sectionHead}>
-      <AppText style={styles.sectionTitle}>{title}</AppText>
-      {hint ? <AppText style={styles.sectionHint}>{hint}</AppText> : null}
+      <View style={styles.sectionRow}>
+        <AppText style={[styles.sectionTitle, onDark && { color: "#fff" }]}>{title}</AppText>
+        {actionLabel && onAction && (
+          <Pressable
+            onPress={() => { tap(); onAction(); }}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={`${actionLabel}, ${title}`}
+          >
+            <AppText style={[styles.sectionAction, onDark && { color: "#fff" }]}>{actionLabel}</AppText>
+          </Pressable>
+        )}
+      </View>
+      {hint ? <AppText style={[styles.sectionHint, onDark && { color: "rgba(255,255,255,0.85)" }]}>{hint}</AppText> : null}
     </View>
   );
 }
@@ -262,15 +358,25 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
     elevation: 0,
   },
+  // Translucent rather than blurred: a real blur is unreliable on web and
+  // expensive on an old Android phone, and at this opacity the gradient still
+  // reads through convincingly.
+  cardFrosted: {
+    backgroundColor: "rgba(255,255,255,0.92)",
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
+  },
 
   btn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 9,
-    // A rounded rectangle, not a pill. Every primary action in the reference
-    // designs sits around this radius; a full pill reads as a chip, not a button.
-    borderRadius: theme.radius.md,
+    // A pill. Both actions in the reference — the filled one and the white one
+    // beside it — are fully round, and at this height that reads as a button
+    // rather than a chip.
+    borderRadius: theme.radius.pill,
     paddingVertical: 18,
     paddingHorizontal: 24,
     // Comfortably past the 44pt floor: this app's hands are not steady ones.
@@ -307,6 +413,26 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", gap: 13, paddingVertical: 12, minHeight: 64 },
 
   sectionHead: { marginTop: 26, marginBottom: 12 },
+  sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
   sectionTitle: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  sectionAction: { fontSize: theme.font.sm, fontWeight: "700", color: theme.colors.brand },
   sectionHint: { fontSize: theme.font.sm, color: theme.colors.muted, marginTop: 2, lineHeight: 21 },
+
+  // Sitting on the dark end of the gradient: white on blue, so it carries its
+  // own contrast rather than borrowing the page's.
+  pageHead: { flexDirection: "row", alignItems: "center", gap: 13, paddingHorizontal: 20, paddingBottom: 18 },
+  pageTitle: { fontSize: theme.font.lg, fontWeight: "800", color: "#fff" },
+  // 0.88 measured 4.3:1 against the gradient's mid stop — under the line. This
+  // clears it even at the palest blue the header can ever sit on.
+  pageSub: { fontSize: theme.font.sm, color: "rgba(255,255,255,0.96)", marginTop: 2, fontWeight: "600" },
+  headIcon: {
+    width: 46, height: 46, borderRadius: 23,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    alignItems: "center", justifyContent: "center",
+  },
+  headBadge: {
+    position: "absolute", top: 7, right: 7, minWidth: 18, height: 18, borderRadius: 9,
+    backgroundColor: theme.colors.error, alignItems: "center", justifyContent: "center", paddingHorizontal: 4,
+  },
+  headBadgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
 });

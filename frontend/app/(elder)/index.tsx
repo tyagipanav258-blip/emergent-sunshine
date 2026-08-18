@@ -9,6 +9,7 @@ import { apiFetch, logActivity } from "@/src/api";
 import { useAuth } from "@/src/auth";
 import { useNotifications } from "@/src/hooks/use-notifications";
 import { LogoMark } from "@/src/components/Logo";
+import { PageHeader, ScreenGradient } from "@/src/components/ui";
 import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
@@ -62,27 +63,17 @@ export default function ElderHome() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]} testID="elder-home">
-      <View style={styles.header}>
-        <LogoMark size={40} />
-        <AppText style={styles.headerTitle}>
-          {greeting}{firstName ? `, ${firstName}` : ""}
-        </AppText>
-        <Pressable
-          onPress={() => router.push("/notifications")}
-          hitSlop={10}
-          style={styles.bell}
-          testID="elder-notifications"
-          accessibilityRole="button"
-          accessibilityLabel={unread > 0 ? `Updates, ${unread} new` : "Updates"}
-        >
-          <Ionicons name="notifications-outline" size={28} color={theme.colors.onSurface} />
-          {unread > 0 && (
-            <View style={styles.badge}>
-              <AppText style={styles.badgeText}>{unread > 9 ? "9+" : unread}</AppText>
-            </View>
-          )}
-        </Pressable>
-      </View>
+      <ScreenGradient height={300} />
+      <PageHeader
+        title={`${greeting}${firstName ? `, ${firstName}` : ""}`}
+        subtitle={user?.location || "Here's your day"}
+        avatar={<LogoMark size={44} />}
+        icon="notifications-outline"
+        iconBadge={unread}
+        iconLabel={unread > 0 ? `Updates, ${unread} new` : "Updates"}
+        onIconPress={() => router.push("/notifications")}
+        testID="elder-home-header"
+      />
 
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.brand} /></View>
