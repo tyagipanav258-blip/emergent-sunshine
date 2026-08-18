@@ -13,14 +13,17 @@ const IMAGES: Record<string, any> = {
   drops: require("../../assets/images/health/med-drops.png"),
 };
 
+// Pastels from the app's own family, kept deliberately distinct from one
+// another: telling one medicine from the next at a glance is the whole point of
+// these tints, so they harmonise without converging.
 const TINTS: Record<string, string> = {
-  amlodipine: "#FBE3E7",
-  metformin: "#ECE9DD",
-  "vitamin d3": "#FFF3D6",
-  tablet: "#E7F0F5",
-  capsule: "#FBEAEA",
-  syrup: "#F3E6D8",
-  drops: "#E1F2EF",
+  amlodipine: "#FCE3E8",
+  metformin: "#EDF3E0",
+  "vitamin d3": "#FCF6C9",
+  tablet: "#E4F1EA",
+  capsule: "#FBE7E2",
+  syrup: "#F3EEDC",
+  drops: "#DFF1EC",
 };
 
 export function medArt(name: string | undefined, type: string | undefined): { image: any; tint: string } {

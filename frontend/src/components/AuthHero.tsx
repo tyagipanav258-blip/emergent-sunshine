@@ -101,12 +101,12 @@ const styles = StyleSheet.create({
   iconWell: {
     width: 72, height: 72, borderRadius: 36, alignItems: "center", justifyContent: "center",
     backgroundColor: theme.colors.surface, overflow: "hidden",
-    shadowColor: "#7C4A03", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3,
+    shadowColor: "#3A5A1E", shadowOpacity: 0.18, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3,
   },
   iconPhoto: { width: "100%", height: "100%" },
   title: { fontSize: 26, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   titleCompact: { fontSize: 22 },
-  // Deep ocean blue rather than the app's usual muted grey — the tone the sky
-  // and sea themselves are made of, so it reads as chosen rather than pasted on.
-  subtitle: { fontSize: 15, fontWeight: "700", color: "#0B4C7C", textAlign: "center", marginTop: 4 },
+  // Deep leaf green rather than the app's usual muted grey — the tone the scene
+  // itself is made of, so it reads as chosen rather than pasted on.
+  subtitle: { fontSize: 15, fontWeight: "700", color: theme.colors.brandDark, textAlign: "center", marginTop: 4 },
 });

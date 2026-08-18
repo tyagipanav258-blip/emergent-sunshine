@@ -365,7 +365,7 @@ const styles = StyleSheet.create({
   okayIcon: { width: 54, height: 54, borderRadius: 27, backgroundColor: "rgba(0,0,0,0.15)", alignItems: "center", justifyContent: "center" },
   okayTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onMarigold },
   okayTitleSent: { color: "#fff" },
-  okaySub: { fontSize: 15, color: "#4A3D00", marginTop: 2 },
+  okaySub: { fontSize: 15, color: "#48430A", marginTop: 2 },
   okaySubSent: { color: "rgba(255,255,255,0.92)" },
   section: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, paddingHorizontal: 20, marginTop: 28, marginBottom: 12 },
   callRow: { flexDirection: "row", gap: 12, paddingHorizontal: 20 },

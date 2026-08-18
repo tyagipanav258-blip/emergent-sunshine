@@ -49,7 +49,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     position: "relative",
     overflow: "hidden",
-    shadowColor: "#F97316",
+    shadowColor: "#5E8F35",
     shadowOpacity: 0.35,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
   },
   sun: {
     // A soft cast so the white sun reads against the brightest part of the sweep.
-    textShadowColor: "rgba(120,53,15,0.35)",
+    textShadowColor: "rgba(50,84,22,0.38)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
@@ -67,6 +67,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   wordmark: { fontSize: 34, fontWeight: "800", color: theme.colors.brand, letterSpacing: -0.5 },
-  wordmarkWarm: { color: "#E07B00" },
+  // The "shine" half, in the butter that replaces the old amber. 5.6:1.
+  wordmarkWarm: { color: theme.colors.marigoldDark },
   subtitle: { fontSize: 14, color: theme.colors.muted, fontWeight: "600", marginTop: -2 },
 });
