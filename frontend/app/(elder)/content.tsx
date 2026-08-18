@@ -5,6 +5,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
+import { WebView } from "react-native-webview";
 import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,8 +21,47 @@ const { width: SCREEN_W } = Dimensions.get("window");
 type Reel = {
   id: string; creator: string; creator_avatar: string; title: string; description: string;
   category: string; video_url: string; thumbnail_url: string;
+  /** Set for real music we do not own: played through YouTube's own embed. */
+  youtube_id?: string;
   likes: number; liked: boolean; reactions: Record<string, number>; my_reaction: string | null; comment_count: number;
 };
+
+/**
+ * A YouTube embed sized to the reel.
+ *
+ * Devotional recordings belong to whoever made them, so the honest way to carry
+ * real music is the rights holder's own player rather than a file we host. The
+ * chrome is hidden and the reel's own overlay sits on top, so it still reads as
+ * part of the feed instead of a browser dropped into it.
+ */
+function YouTubeReel({ id, active }: { id: string; active: boolean }) {
+  const src =
+    `https://www.youtube.com/embed/${id}` +
+    `?autoplay=${active ? 1 : 0}&mute=0&controls=0&modestbranding=1&rel=0&playsinline=1&loop=1&playlist=${id}`;
+  if (Platform.OS === "web") {
+    return (
+      // A DOM element, reachable only on web — Metro never bundles this branch native.
+      <iframe
+        key={`${id}-${active}`}
+        src={src}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }}
+        allow="autoplay; encrypted-media"
+        title="Video"
+      />
+    );
+  }
+  return (
+    <WebView
+      key={`${id}-${active}`}
+      source={{ uri: src }}
+      style={StyleSheet.absoluteFill}
+      allowsInlineMediaPlayback
+      mediaPlaybackRequiresUserAction={false}
+      javaScriptEnabled
+      scrollEnabled={false}
+    />
+  );
+}
 
 export default function ElderContent() {
   const insets = useSafeAreaInsets();
@@ -183,20 +223,35 @@ function ReelItem({
   reel, active, height, onLike, onReact, onComment, onShare,
 }: { reel: Reel; active: boolean; height: number; onLike: () => void; onReact: () => void; onComment: () => void; onShare: () => void }) {
   const insets = useSafeAreaInsets();
-  const player = useVideoPlayer(reel.video_url, (p) => { p.loop = true; });
+  const embedded = Boolean(reel.youtube_id);
+  // An embedded player owns its own playback, so the local player is only fed a
+  // source when we are the ones streaming it.
+  const player = useVideoPlayer(embedded ? null : reel.video_url, (p) => { p.loop = true; });
   const [playing, setPlaying] = useState(true);
 
   useEffect(() => {
+    if (embedded) return;
     if (active) { player.play(); setPlaying(true); } else player.pause();
-  }, [active, player]);
+  }, [active, player, embedded]);
 
-  const toggle = () => { if (playing) { player.pause(); setPlaying(false); } else { player.play(); setPlaying(true); } };
+  const toggle = () => {
+    if (embedded) return;
+    if (playing) { player.pause(); setPlaying(false); } else { player.play(); setPlaying(true); }
+  };
   const myTopReaction = Object.entries(reel.reactions || {}).sort((a, b) => b[1] - a[1])[0];
 
   return (
     <View style={[styles.reel, { height }]} testID={`reel-${reel.id}`}>
-      <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
-      <Image source={{ uri: reel.thumbnail_url }} style={[StyleSheet.absoluteFill, { opacity: 0.55 }]} contentFit="cover" />
+      {embedded ? (
+        <YouTubeReel id={reel.youtube_id!} active={active} />
+      ) : (
+        <VideoView player={player} style={StyleSheet.absoluteFill} contentFit="cover" nativeControls={false} />
+      )}
+      {/* The wash exists to make overlay text readable over our own footage.
+          A real recording is the point of the screen, so it stays clear. */}
+      {!embedded && (
+        <Image source={{ uri: reel.thumbnail_url }} style={[StyleSheet.absoluteFill, { opacity: 0.55 }]} contentFit="cover" />
+      )}
       <LinearGradient colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.85)"]} style={styles.bottomScrim} pointerEvents="none" />
       <Pressable
         style={StyleSheet.absoluteFill}
