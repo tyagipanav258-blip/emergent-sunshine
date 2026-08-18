@@ -11,8 +11,12 @@
  */
 export const theme = {
   colors: {
-    // Elder-friendly: Deep Teal + warm Peach on a teal-tinted white
-    surface: '#F8FBFA',
+    // Elder-friendly: Deep Teal + warm Peach on a teal-tinted ground.
+    //
+    // The ground is deliberately a shade off white. Cards are white and carry no
+    // border, so the page behind them has to be tinted enough for them to lift
+    // off it — a near-white ground is why bordered boxes were needed at all.
+    surface: '#EFF6F4',
     onSurface: '#14211F',
     surfaceSecondary: '#FFFFFF',
     surfaceTertiary: '#E9F2F0',

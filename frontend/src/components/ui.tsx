@@ -91,7 +91,7 @@ export function Button({
         style,
       ]}
     >
-      {filled && <GradientFill tone={variant === "danger" ? "danger" : "brand"} radius={theme.radius.pill} />}
+      {filled && <GradientFill tone={variant === "danger" ? "danger" : "brand"} radius={theme.radius.md} />}
       {busy ? (
         <ActivityIndicator color={ink} />
       ) : (
@@ -145,16 +145,84 @@ export function IconWell({
   );
 }
 
-/** A number worth glancing at, with its label under it. */
+/**
+ * A number worth glancing at.
+ *
+ * Tinted rather than white, and flat rather than lifted: these sit in grids of
+ * two or four, and a grid of shadows reads as clutter where a grid of quiet
+ * colour reads as a set.
+ */
 export function StatTile({
   value, label, icon, tone = "brand", testID,
 }: { value: string; label: string; icon?: IconName; tone?: "brand" | "warm" | "danger"; testID?: string }) {
+  const bg = {
+    brand: theme.colors.brandLight,
+    warm: theme.colors.marigoldLight,
+    danger: theme.colors.surfaceTertiary,
+  }[tone];
   return (
-    <Card tone="raised" style={styles.stat} testID={testID}>
-      {icon && <IconWell icon={icon} size={38} tone={tone} />}
+    <View style={[styles.stat, { backgroundColor: bg }]} testID={testID}>
+      {icon && <IconWell icon={icon} size={36} tone={tone === "danger" ? "danger" : tone} />}
       <AppText style={styles.statValue}>{value}</AppText>
       <AppText style={styles.statLabel}>{label}</AppText>
-    </Card>
+    </View>
+  );
+}
+
+/**
+ * The small circular action that sits at the end of a list row — call, message,
+ * open. Filled and tinted so it reads as pressable at a glance, which a bare
+ * icon on a white row does not.
+ */
+export function RoundAction({
+  icon, onPress, tone = "brand", testID, accessibilityLabel,
+}: {
+  icon: IconName;
+  onPress: () => void;
+  tone?: "brand" | "warm" | "danger";
+  testID?: string;
+  accessibilityLabel: string;
+}) {
+  const [bg, fg] = {
+    brand: [theme.colors.brandLight, theme.colors.brand],
+    warm: [theme.colors.marigoldLight, theme.colors.marigoldDark],
+    danger: [theme.colors.surfaceTertiary, theme.colors.error],
+  }[tone];
+  return (
+    <Pressable
+      onPress={() => { tap(); onPress(); }}
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      hitSlop={6}
+      style={({ pressed }) => [styles.round, { backgroundColor: bg }, pressed && { opacity: 0.7 }]}
+    >
+      <Ionicons name={icon} size={20} color={fg} />
+    </Pressable>
+  );
+}
+
+/** A list row on a white card: thumbnail or well, text, then actions. */
+export function Row({
+  children, style, onPress, testID, accessibilityLabel,
+}: {
+  children: React.ReactNode;
+  style?: StyleProp<ViewStyle>;
+  onPress?: () => void;
+  testID?: string;
+  accessibilityLabel?: string;
+}) {
+  if (!onPress) return <View style={[styles.row, style]} testID={testID}>{children}</View>;
+  return (
+    <Pressable
+      onPress={() => { tap(); onPress(); }}
+      testID={testID}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [styles.row, style, pressed && { opacity: 0.85 }]}
+    >
+      {children}
+    </Pressable>
   );
 }
 
@@ -169,31 +237,41 @@ export function SectionHeader({ title, hint }: { title: string; hint?: string })
 }
 
 const styles = StyleSheet.create({
+  // No border. A card is a white sheet lifted off a tinted page by its shadow —
+  // an outline around it is the thing that makes a card look like a box.
   card: {
     backgroundColor: theme.colors.surfaceSecondary,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 16,
-  },
-  // The lift in these designs is shadow, not a heavier border.
-  cardRaised: {
-    borderColor: "transparent",
-    shadowColor: "#1C2714",
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
+    padding: 18,
+    shadowColor: "#0B2C27",
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 },
-    elevation: 3,
+    elevation: 2,
   },
-  cardQuiet: { backgroundColor: theme.colors.surfaceTertiary, borderColor: "transparent" },
+  cardRaised: {
+    shadowOpacity: 0.11,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 5,
+  },
+  // A tinted panel that belongs to the page rather than floating over it, so it
+  // carries no shadow at all.
+  cardQuiet: {
+    backgroundColor: theme.colors.surfaceTertiary,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
 
   btn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 9,
-    borderRadius: theme.radius.pill,
-    paddingVertical: 17,
+    // A rounded rectangle, not a pill. Every primary action in the reference
+    // designs sits around this radius; a full pill reads as a chip, not a button.
+    borderRadius: theme.radius.md,
+    paddingVertical: 18,
     paddingHorizontal: 24,
     // Comfortably past the 44pt floor: this app's hands are not steady ones.
     minHeight: 58,
@@ -218,9 +296,15 @@ const styles = StyleSheet.create({
   chipText: { fontSize: theme.font.sm, fontWeight: "700", color: theme.colors.onSurfaceSecondary },
   chipTextOn: { color: "#fff" },
 
-  stat: { flex: 1, gap: 6, alignItems: "flex-start", minWidth: 140 },
+  stat: {
+    flex: 1, gap: 8, alignItems: "flex-start", minWidth: 140,
+    borderRadius: theme.radius.lg, padding: 16,
+  },
   statValue: { fontSize: theme.font.xl, fontWeight: "800", color: theme.colors.onSurface },
-  statLabel: { fontSize: theme.font.sm, color: theme.colors.muted, fontWeight: "600" },
+  statLabel: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, fontWeight: "600" },
+
+  round: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  row: { flexDirection: "row", alignItems: "center", gap: 13, paddingVertical: 12, minHeight: 64 },
 
   sectionHead: { marginTop: 26, marginBottom: 12 },
   sectionTitle: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },

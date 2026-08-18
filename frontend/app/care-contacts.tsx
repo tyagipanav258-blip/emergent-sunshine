@@ -269,10 +269,12 @@ const styles = StyleSheet.create({
   section: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
   sectionSub: { fontSize: theme.font.sm, color: theme.colors.muted, marginTop: 2, marginBottom: 12, lineHeight: 21 },
   empty: { fontSize: theme.font.sm, color: theme.colors.muted, lineHeight: 22, marginBottom: 12 },
+  // White sheet, no outline, lifted by shadow alone.
   row: {
-    flexDirection: "row", alignItems: "center", gap: 10, padding: 14, marginBottom: 10,
+    flexDirection: "row", alignItems: "center", gap: 10, padding: 16, marginBottom: 12,
     backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg,
-    borderWidth: 1, borderColor: theme.colors.border,
+    shadowColor: "#0B2C27", shadowOpacity: 0.07, shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 }, elevation: 2,
   },
   rank: {
     width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.brandLight,
@@ -286,9 +288,12 @@ const styles = StyleSheet.create({
   rowName: { fontSize: theme.font.base, fontWeight: "800", color: theme.colors.onSurface },
   rowMeta: { fontSize: theme.font.sm, color: theme.colors.muted, marginTop: 1, lineHeight: 19 },
   iconBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  // The one place a dashed outline is right: it reads as an empty slot to fill
+  // rather than a surface with content on it.
   addBtn: {
-    flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 14, paddingHorizontal: 14,
-    borderRadius: theme.radius.lg, borderWidth: 2, borderStyle: "dashed",
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
+    paddingVertical: 16, paddingHorizontal: 16,
+    borderRadius: theme.radius.md, borderWidth: 2, borderStyle: "dashed",
     borderColor: theme.colors.borderStrong, minHeight: 58,
   },
   addText: { fontSize: theme.font.base, fontWeight: "700", color: theme.colors.brand },
@@ -302,8 +307,8 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: theme.font.lg, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center", marginBottom: 4 },
   input: {
     fontSize: theme.font.base, color: theme.colors.onSurface, backgroundColor: theme.colors.surfaceSecondary,
-    borderRadius: theme.radius.md, borderWidth: 2, borderColor: theme.colors.border,
-    paddingHorizontal: 16, paddingVertical: 14, minHeight: 54,
+    borderRadius: theme.radius.md, borderWidth: 0,
+    paddingHorizontal: 16, paddingVertical: 15, minHeight: 56,
   },
   err: { fontSize: theme.font.sm, color: theme.colors.error, fontWeight: "700" },
 });
