@@ -3656,6 +3656,11 @@ async def voice_note_audio(
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_API_KEY_SID = os.environ.get("TWILIO_API_KEY_SID", "")
 TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET", "")
+# Twilio's REST API accepts either an API key pair or the account's own auth
+# token. The key pair is better practice — it can be revoked on its own — but
+# requiring it meant a step in the console before anything could be tested, so
+# the token is accepted as a fallback.
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
@@ -3670,14 +3675,20 @@ SOS_RING_SECONDS = int(os.environ.get("SOS_RING_SECONDS", "25"))
 # How long to listen for a reply once the message has finished playing.
 SOS_LISTEN_SECONDS = int(os.environ.get("SOS_LISTEN_SECONDS", "15"))
 
-TELEPHONY_READY = bool(TWILIO_ACCOUNT_SID and TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET
+_TWILIO_HAS_CREDS = bool((TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET) or TWILIO_AUTH_TOKEN)
+TELEPHONY_READY = bool(TWILIO_ACCOUNT_SID and _TWILIO_HAS_CREDS
                        and TWILIO_PHONE_NUMBER and PUBLIC_BASE_URL)
 
 
 def _twilio_auth() -> tuple:
-    """API key rather than the account auth token: it can be revoked on its own
-    if this integration is ever compromised, without breaking everything else."""
-    return (TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET)
+    """Prefer the API key pair, fall back to the account's auth token.
+
+    The key pair is the better credential — revoking it does not break every
+    other thing the account does — so it wins when both are present.
+    """
+    if TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET:
+        return (TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET)
+    return (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 
 async def _twilio_call(to: str, answer_path: str, status_path: str, ring_seconds: int) -> Optional[str]:
