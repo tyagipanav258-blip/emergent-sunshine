@@ -4,8 +4,10 @@ import re
 import json
 import uuid
 import base64
+import hmac
 import secrets
 import asyncio
+import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -15,7 +17,7 @@ from typing import List, Optional, Literal
 import jwt
 import httpx
 import requests
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Response, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, Request, Response, UploadFile, File, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.concurrency import run_in_threadpool
 from dotenv import load_dotenv
@@ -466,6 +468,40 @@ async def child_login(b: ChildLogin):
         "access_token": make_token(u["id"], "child"),
         "user": {**public_user(u), "elder_name": elder["name"] if elder else None},
     }
+
+
+class ProfileIn(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+
+
+@api.put("/auth/me")
+async def update_me(b: ProfileIn, u: dict = Depends(current_user)):
+    """Edit your own name and phone.
+
+    The phone matters more than it looks: it is the number the emergency
+    cascade dials. Accounts created before that field existed have none, and
+    without this endpoint their only route to being reachable was to register
+    again from scratch.
+    """
+    patch: dict = {}
+    if b.name is not None and b.name.strip():
+        patch["name"] = b.name.strip()
+    if b.phone is not None:
+        phone = norm_phone(b.phone)
+        if phone and not re.fullmatch(r"\+?\d{7,15}", phone):
+            raise HTTPException(422, "Please enter a phone number we can dial")
+        patch["phone"] = phone or None
+    if not patch:
+        return public_user(u)
+    # An elder's phone is also their login. Letting it collide with another
+    # account would lock somebody out of their own.
+    if patch.get("phone") and u["role"] == "elder":
+        clash = await db.users.find_one({"role": "elder", "phone": patch["phone"], "id": {"$ne": u["id"]}})
+        if clash:
+            raise HTTPException(409, "That phone number is already registered")
+    await db.users.update_one({"id": u["id"]}, {"$set": patch})
+    return public_user(await db.users.find_one({"id": u["id"]}, {"_id": 0}))
 
 
 @api.get("/auth/me")
@@ -2329,12 +2365,26 @@ async def sos(u: dict = Depends(current_user)):
             "No family member is connected to your account yet, so nobody could be alerted. "
             f"Please call {EMERGENCY_NUMBER} for emergency help."
         )
+    # Notifications reach a phone that is being looked at. A ringing phone
+    # reaches one that is not, which in an emergency is most of them.
+    run = None
+    try:
+        run = await start_sos_cascade(elder)
+    except Exception:
+        logger.exception("sos cascade failed to start for %s", eid)
+    if run:
+        first = run["chain"][0]["name"] if run["chain"] else None
+        message = (
+            f"We are calling your family now, starting with {first}. " + message
+            if first else message
+        )
     return {
         "ok": True,
-        "delivered": bool(contacts),
+        "delivered": bool(contacts) or bool(run),
         "message": message,
         "contacts_notified": [c["name"] for c in contacts],
         "emergency_number": EMERGENCY_NUMBER,
+        "run_id": run["id"] if run else None,
     }
 
 
@@ -3580,6 +3630,401 @@ async def voice_note_audio(
     if doc.get("to_user_id") == u["id"] and not doc.get("played_at"):
         await db.voice_notes.update_one({"id": nid}, {"$set": {"played_at": datetime.now(timezone.utc).isoformat()}})
     return Response(content=content, media_type=ctype or AUDIO_TYPES.get(doc.get("ext", "m4a"), "audio/m4a"))
+
+
+# ============================ TELEPHONY ============================
+# Two very different jobs share one phone line.
+#
+# The emergency cascade plays a fixed sentence and listens for any sign a human
+# heard it. Nothing improvises: the words are rendered once per elder and
+# replayed, because in an emergency the script is the product and a model that
+# paraphrases is a liability.
+#
+# The booking call is the opposite — a real negotiation with a receptionist, so
+# it hands the line to a conversational agent and takes structured facts back
+# out of the transcript afterwards.
+#
+# Everything here degrades quietly while its keys are blank, so a deployment
+# without telephony behaves exactly as the app did before it existed.
+
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_API_KEY_SID = os.environ.get("TWILIO_API_KEY_SID", "")
+TWILIO_API_KEY_SECRET = os.environ.get("TWILIO_API_KEY_SECRET", "")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER", "")
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_AGENT_ID = os.environ.get("ELEVENLABS_AGENT_ID", "")
+ELEVENLABS_WEBHOOK_SECRET = os.environ.get("ELEVENLABS_WEBHOOK_SECRET", "")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+
+# How long each contact's phone rings before we give up and move on. Twilio
+# defaults to 60, which would spend three minutes on three contacts — far too
+# long when the whole point is that somebody comes quickly.
+SOS_RING_SECONDS = int(os.environ.get("SOS_RING_SECONDS", "25"))
+# How long to listen for a reply once the message has finished playing.
+SOS_LISTEN_SECONDS = int(os.environ.get("SOS_LISTEN_SECONDS", "15"))
+
+TELEPHONY_READY = bool(TWILIO_ACCOUNT_SID and TWILIO_API_KEY_SID and TWILIO_API_KEY_SECRET
+                       and TWILIO_PHONE_NUMBER and PUBLIC_BASE_URL)
+
+
+def _twilio_auth() -> tuple:
+    """API key rather than the account auth token: it can be revoked on its own
+    if this integration is ever compromised, without breaking everything else."""
+    return (TWILIO_API_KEY_SID, TWILIO_API_KEY_SECRET)
+
+
+async def _twilio_call(to: str, answer_path: str, status_path: str, ring_seconds: int) -> Optional[str]:
+    """Place one outbound call. Returns Twilio's call sid, or None if it failed."""
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Calls.json"
+    form = {
+        "To": to,
+        "From": TWILIO_PHONE_NUMBER,
+        "Url": f"{PUBLIC_BASE_URL}{answer_path}",
+        "StatusCallback": f"{PUBLIC_BASE_URL}{status_path}",
+        # `completed` alone would not tell us a call was never picked up.
+        "StatusCallbackEvent": "completed",
+        "Timeout": str(ring_seconds),
+        # Voicemail answers the phone, so without this a recording looks
+        # identical to a person and the chain would stop at the first machine.
+        "MachineDetection": "Enable",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(url, data=form, auth=_twilio_auth())
+        if r.status_code >= 300:
+            logger.error("twilio call failed %s: %s", r.status_code, r.text[:400])
+            return None
+        return r.json().get("sid")
+    except Exception:
+        logger.exception("twilio call raised")
+        return None
+
+
+def _sos_script(name: str) -> str:
+    first = (name or "Your family member").split(" ")[0]
+    return (
+        "This is an emergency alert from Sunshine. "
+        f"{first} has pressed the emergency button and may need help. "
+        "Please say something, or press one, so we know you have heard this. "
+        "If we do not hear from you, we will call the next person."
+    )
+
+
+async def _sos_audio_id(elder: dict) -> Optional[str]:
+    """The elder's alert, rendered once and kept.
+
+    Regenerating this per emergency would burn credits on identical audio and
+    add a second of latency to the one call where latency matters. Keyed by the
+    script itself, so changing the wording re-renders and nothing else does.
+    """
+    script = _sos_script(elder.get("name"))
+    digest = hashlib.sha256(script.encode("utf-8")).hexdigest()[:32]
+    existing = await db.sos_audio.find_one({"id": digest}, {"_id": 0, "id": 1})
+    if existing:
+        return digest
+    if not (ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}",
+                headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "text": script,
+                    "model_id": os.environ.get("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
+                    # High stability: the same delivery every time, not
+                    # expressive variation on an emergency line.
+                    "voice_settings": {"stability": 0.85, "similarity_boost": 0.7},
+                },
+            )
+        if r.status_code >= 300:
+            logger.error("elevenlabs tts failed %s: %s", r.status_code, r.text[:300])
+            return None
+        await db.sos_audio.insert_one({
+            "id": digest, "script": script, "audio": r.content,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return digest
+    except Exception:
+        logger.exception("elevenlabs tts raised")
+        return None
+
+
+@api.get("/sos/audio/{aid}")
+async def sos_audio(aid: str):
+    """Twilio fetches this mid-call, so it cannot require a bearer token. The id
+    is a content hash — unguessable, and it reveals only a generic alert."""
+    doc = await db.sos_audio.find_one({"id": aid}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Not found")
+    return Response(content=doc["audio"], media_type="audio/mpeg")
+
+
+def _twiml(body: str) -> Response:
+    return Response(content=f'<?xml version="1.0" encoding="UTF-8"?><Response>{body}</Response>',
+                    media_type="application/xml")
+
+
+def _xml_escape(s: str) -> str:
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+async def _start_sos_leg(sos: dict) -> bool:
+    """Ring the next contact in the chain. False once the chain is exhausted."""
+    idx = sos["index"]
+    chain = sos["chain"]
+    if idx >= len(chain):
+        await db.sos_runs.update_one({"id": sos["id"]}, {"$set": {"state": "exhausted"}})
+        return False
+    contact = chain[idx]
+    sid = await _twilio_call(
+        contact["phone"],
+        f"/api/webhooks/twilio/sos/{sos['id']}/voice",
+        f"/api/webhooks/twilio/sos/{sos['id']}/status",
+        SOS_RING_SECONDS,
+    )
+    await db.sos_runs.update_one({"id": sos["id"]}, {"$set": {
+        "state": "calling", "current_sid": sid,
+        f"attempts.{idx}": {"name": contact["name"], "phone": contact["phone"],
+                            "sid": sid, "at": datetime.now(timezone.utc).isoformat(),
+                            "outcome": "ringing" if sid else "failed"},
+    }})
+    if not sid:
+        # Could not even place it — do not let one bad number stall the chain.
+        await db.sos_runs.update_one({"id": sos["id"]}, {"$inc": {"index": 1}})
+        return await _start_sos_leg(await db.sos_runs.find_one({"id": sos["id"]}, {"_id": 0}))
+    return True
+
+
+async def start_sos_cascade(elder: dict) -> Optional[dict]:
+    """Ring the escalation chain until somebody answers and reacts."""
+    if not TELEPHONY_READY:
+        return None
+    chain = await _escalation_chain(elder["id"])
+    if not chain:
+        return None
+    aid = await _sos_audio_id(elder)
+    run = {
+        "id": str(uuid.uuid4()), "elder_id": elder["id"], "audio_id": aid,
+        "chain": chain, "index": 0, "state": "calling", "attempts": {},
+        "acknowledged_by": None, "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.sos_runs.insert_one(run.copy())
+    run.pop("_id", None)
+    await _start_sos_leg(run)
+    return run
+
+
+@api.post("/webhooks/twilio/sos/{run_id}/voice")
+async def sos_voice(run_id: str, request: Request):
+    """What Twilio should say when the call connects."""
+    run = await db.sos_runs.find_one({"id": run_id}, {"_id": 0})
+    if not run:
+        return _twiml("<Hangup/>")
+    form = await request.form()
+    # Answering machine detection: a recording cannot press 1 or reply, so
+    # hanging up now saves thirty seconds before we reach a real person.
+    if str(form.get("AnsweredBy", "")).startswith("machine"):
+        await db.sos_runs.update_one({"id": run_id}, {"$set": {f"attempts.{run['index']}.outcome": "voicemail"}})
+        return _twiml("<Hangup/>")
+
+    elder = await db.users.find_one({"id": run["elder_id"]}, {"_id": 0})
+    if run.get("audio_id"):
+        say = f'<Play>{PUBLIC_BASE_URL}/api/sos/audio/{run["audio_id"]}</Play>'
+    else:
+        # No rendered audio — better a robotic voice than a silent call.
+        say = f'<Say voice="alice">{_xml_escape(_sos_script((elder or {}).get("name")))}</Say>'
+    gather = (
+        f'<Gather input="speech dtmf" numDigits="1" timeout="{SOS_LISTEN_SECONDS}" '
+        f'speechTimeout="auto" action="{PUBLIC_BASE_URL}/api/webhooks/twilio/sos/{run_id}/heard" method="POST">'
+        f"{say}</Gather>"
+        # Reaching here means the listening window closed with nothing in it.
+        f"<Hangup/>"
+    )
+    return _twiml(gather)
+
+
+@api.post("/webhooks/twilio/sos/{run_id}/heard")
+async def sos_heard(run_id: str, request: Request):
+    """Any speech or keypress means a human is on the line. That is all we need."""
+    run = await db.sos_runs.find_one({"id": run_id}, {"_id": 0})
+    if not run:
+        return _twiml("<Hangup/>")
+    form = await request.form()
+    if not (form.get("Digits") or (form.get("SpeechResult") or "").strip()):
+        return _twiml("<Hangup/>")
+    idx = run["index"]
+    who = (run["chain"][idx] if idx < len(run["chain"]) else {}) or {}
+    await db.sos_runs.update_one({"id": run_id}, {"$set": {
+        "state": "acknowledged", "acknowledged_by": who.get("name"),
+        "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+        f"attempts.{idx}.outcome": "acknowledged",
+    }})
+    # Everyone else should know help is coming, or three people rush over and
+    # each assumes somebody else has it in hand.
+    await _alert_family(
+        run["elder_id"], "sos",
+        f"{who.get('name') or 'Someone'} answered the emergency call and is on the way.",
+    )
+    return _twiml(
+        '<Say voice="alice">Thank you. We have let the family know you are on the way.</Say><Hangup/>'
+    )
+
+
+@api.post("/webhooks/twilio/sos/{run_id}/status")
+async def sos_status(run_id: str, request: Request):
+    """The call ended. If nobody acknowledged, move down the chain."""
+    run = await db.sos_runs.find_one({"id": run_id}, {"_id": 0})
+    if not run or run.get("state") in {"acknowledged", "exhausted"}:
+        return Response(status_code=204)
+    idx = run["index"]
+    attempt = (run.get("attempts") or {}).get(str(idx)) or {}
+    if attempt.get("outcome") != "acknowledged":
+        await db.sos_runs.update_one({"id": run_id}, {
+            "$set": {f"attempts.{idx}.outcome": attempt.get("outcome") or "no_answer"},
+            "$inc": {"index": 1},
+        })
+        await _start_sos_leg(await db.sos_runs.find_one({"id": run_id}, {"_id": 0}))
+    return Response(status_code=204)
+
+
+@api.get("/sos/runs/{run_id}")
+async def sos_run(run_id: str, u: dict = Depends(current_user)):
+    """Live progress, so her screen can say who is being called right now."""
+    run = await db.sos_runs.find_one({"id": run_id}, {"_id": 0})
+    if not run or run["elder_id"] != await elder_id_for(u):
+        raise HTTPException(404, "Not found")
+    attempts = run.get("attempts") or {}
+    return {
+        "id": run["id"], "state": run["state"],
+        "acknowledged_by": run.get("acknowledged_by"),
+        "calling": (run["chain"][run["index"]]["name"]
+                    if run["state"] == "calling" and run["index"] < len(run["chain"]) else None),
+        "attempts": [
+            {"name": attempts[k]["name"], "outcome": attempts[k]["outcome"]}
+            for k in sorted(attempts, key=lambda x: int(x))
+        ],
+        "emergency_number": EMERGENCY_NUMBER,
+    }
+
+
+# ---------------------------- booking by agent ----------------------------
+@api.post("/concierge/tasks/{task_id}/call")
+async def call_clinic(task_id: str, u: dict = Depends(current_user)):
+    """Hand a booking task to the conversational agent."""
+    if not (ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID and TWILIO_PHONE_NUMBER):
+        raise HTTPException(503, "Calling is not configured yet")
+    eid = await elder_id_for(u)
+    task = await db.tasks.find_one({"id": task_id, "elder_id": eid}, {"_id": 0})
+    if not task:
+        raise HTTPException(404, "Request not found")
+    elder = await db.users.find_one({"id": eid}, {"_id": 0})
+    doctor = await db.doctors.find_one({"id": task.get("doctor_id")}, {"_id": 0}) if task.get("doctor_id") else None
+    if not doctor:
+        doctor = await db.doctors.find_one({"elder_id": eid}, {"_id": 0})
+    if not doctor:
+        raise HTTPException(422, "Add the clinic's phone number first")
+
+    variables = {
+        "patient_name": elder.get("name") or "",
+        "patient_dob": elder.get("dob") or "not provided",
+        "patient_age": str(elder.get("age") or "not provided"),
+        "is_existing_patient": "yes" if task.get("existing_patient") else "unknown",
+        "patient_id": elder.get("patient_id") or "not provided",
+        "specialty": doctor.get("specialty") or "general",
+        "doctor_name": doctor.get("name") or "any available doctor",
+        "urgency": task.get("urgency") or "flexible",
+        "preferred_days": task.get("preferred_days") or "any day",
+        "preferred_time": task.get("preferred_time") or "any time",
+        "callback_number": elder.get("phone") or "",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                "https://api.elevenlabs.io/v1/convai/twilio/outbound-call",
+                headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                json={
+                    "agent_id": ELEVENLABS_AGENT_ID,
+                    "agent_phone_number_id": os.environ.get("ELEVENLABS_PHONE_NUMBER_ID", ""),
+                    "to_number": doctor["phone"],
+                    "conversation_initiation_client_data": {"dynamic_variables": variables},
+                },
+            )
+        if r.status_code >= 300:
+            logger.error("agent call failed %s: %s", r.status_code, r.text[:400])
+            raise HTTPException(502, "We could not start the call")
+        conv = r.json().get("conversation_id")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("agent call raised")
+        raise HTTPException(502, "We could not start the call")
+
+    await db.tasks.update_one({"id": task_id}, {
+        "$set": {"status": "agent_arranging", "conversation_id": conv},
+        "$push": {"timeline": {"status": "agent_arranging", "at": datetime.now(timezone.utc).isoformat(),
+                               "by": "sunshine", "note": f"Calling {doctor.get('name')}"}},
+    })
+    return await db.tasks.find_one({"id": task_id}, {"_id": 0})
+
+
+@api.post("/webhooks/elevenlabs")
+async def elevenlabs_webhook(request: Request):
+    """What the agent achieved, written back onto the task.
+
+    The signature check is not ceremony: without it anyone who learns the URL
+    could post a fabricated appointment into somebody's care record.
+    """
+    raw = await request.body()
+    if ELEVENLABS_WEBHOOK_SECRET:
+        sig = request.headers.get("elevenlabs-signature") or request.headers.get("ElevenLabs-Signature") or ""
+        expected = hmac.new(ELEVENLABS_WEBHOOK_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+        if expected not in sig:
+            raise HTTPException(401, "Bad signature")
+    try:
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(400, "Bad payload")
+
+    data = body.get("data") or body
+    conv = data.get("conversation_id")
+    task = await db.tasks.find_one({"conversation_id": conv}, {"_id": 0}) if conv else None
+    if not task:
+        return {"ok": True, "matched": False}
+
+    analysis = (data.get("analysis") or {}).get("data_collection_results") or {}
+
+    def field(key):
+        v = analysis.get(key)
+        return (v or {}).get("value") if isinstance(v, dict) else v
+
+    confirmed = field("appointment_confirmed")
+    confirmed = str(confirmed).lower() in {"true", "yes", "1"} if confirmed is not None else False
+    slot, with_whom = field("slot_datetime"), field("booked_with")
+    why_not = field("failure_reason")
+
+    # A proposal, not a booking. The family confirms before it becomes real —
+    # a medical appointment for an elderly person should fail by being queried,
+    # not by silently existing in the wrong place.
+    await db.tasks.update_one({"id": task["id"]}, {
+        "$set": {
+            "status": "awaiting_operator" if confirmed else "requested",
+            "proposed_slot": slot if confirmed else None,
+            "proposed_with": with_whom if confirmed else None,
+            "call_transcript": data.get("transcript"),
+        },
+        "$push": {"timeline": {
+            "status": "agent_called", "at": datetime.now(timezone.utc).isoformat(), "by": "sunshine",
+            "note": (f"Booked {slot} with {with_whom}. Please confirm."
+                     if confirmed else f"No appointment: {why_not or 'the clinic could not book by phone'}"),
+        }},
+    })
+    await notify_elder(task["elder_id"], "task_update",
+                       "Sunshine called the clinic",
+                       (f"{with_whom} offered {slot}." if confirmed else "No appointment could be made."),
+                       {"task_id": task["id"]})
+    return {"ok": True, "matched": True, "confirmed": confirmed}
 
 
 @api.get("/")
