@@ -273,7 +273,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row", alignItems: "center", gap: 10, padding: 16, marginBottom: 12,
     backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg,
-    shadowColor: "#0B2C27", shadowOpacity: 0.07, shadowRadius: 16,
+    shadowColor: "#0E2439", shadowOpacity: 0.07, shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 }, elevation: 2,
   },
   rank: {

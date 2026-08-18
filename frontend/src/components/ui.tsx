@@ -243,7 +243,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceSecondary,
     borderRadius: theme.radius.lg,
     padding: 18,
-    shadowColor: "#0B2C27",
+    shadowColor: "#0E2439",
     shadowOpacity: 0.07,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 6 },

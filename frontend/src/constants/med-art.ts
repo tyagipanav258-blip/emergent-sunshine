@@ -18,12 +18,12 @@ const IMAGES: Record<string, any> = {
 // these tints, so they harmonise without converging.
 const TINTS: Record<string, string> = {
   amlodipine: "#FFE3E6",
-  metformin: "#E6F1EE",
+  metformin: "#E7EDF9",
   "vitamin d3": "#FFEEDC",
-  tablet: "#DEF0F6",
+  tablet: "#DDEBF8",
   capsule: "#FFE7DE",
   syrup: "#F2EFE6",
-  drops: "#DDF2EE",
+  drops: "#EAE6F7",
 };
 
 export function medArt(name: string | undefined, type: string | undefined): { image: any; tint: string } {

@@ -3,6 +3,7 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { apiFetch } from "@/src/api";
+import { theme } from "@/src/theme";
 import { storage } from "@/src/utils/storage";
 
 /**
@@ -51,7 +52,7 @@ async function ensureChannels() {
     name: "Updates",
     importance: Notifications.AndroidImportance.DEFAULT,
     vibrationPattern: [0, 200, 120, 200],
-    lightColor: "#3F6E93",
+    lightColor: theme.colors.brand,
   });
   await Notifications.setNotificationChannelAsync("urgent", {
     name: "Emergencies and missed medicines",

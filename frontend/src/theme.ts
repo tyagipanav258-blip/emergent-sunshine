@@ -1,57 +1,60 @@
 /**
- * Deep teal with a warm peach counterpoint, on an almost-white ground carrying
- * the faintest teal bias — a chosen neutral rather than an inherited grey.
+ * Azure blue with a warm peach counterpoint, on a ground carrying the faintest
+ * blue bias — a chosen neutral rather than an inherited grey.
  *
- * The reference designs sit far lighter than this: their teal is nearer #2DB89C
- * and their coral #FF8A7A, both around 3:1, which is fine on a mockup and not
- * fine on a button a 75-year-old has to read. So the pale values are kept for
- * what pale values are good at — fills, wells, chips, card tints — and anything
- * that ever carries text or an icon is taken down until it clears 4.5:1. Same
- * family, a few shades deeper where legibility depends on it.
+ * No green anywhere, by instruction. That costs one convention worth naming:
+ * `success` is a deep cyan rather than the usual green tick, so the checkmark
+ * itself carries "done" rather than the colour doing it. Say the word and a
+ * green comes back for that state alone.
+ *
+ * The reference blue sits lighter than the brand here — nearer #3387CE, which is
+ * 3.8:1 and cannot carry a white label. So the pale values keep doing what pale
+ * values are good at, filling wells and tinting cards, and anything carrying
+ * text or an icon is taken down until it clears 4.5:1.
  */
 export const theme = {
   colors: {
-    // Elder-friendly: Deep Teal + warm Peach on a teal-tinted ground.
+    // Elder-friendly: Azure Blue + warm Peach on a blue-tinted ground.
     //
     // The ground is deliberately a shade off white. Cards are white and carry no
     // border, so the page behind them has to be tinted enough for them to lift
     // off it — a near-white ground is why bordered boxes were needed at all.
-    surface: '#EFF6F4',
-    onSurface: '#14211F',
+    surface: '#EDF3FA',
+    onSurface: '#131E2A',
     surfaceSecondary: '#FFFFFF',
-    surfaceTertiary: '#E9F2F0',
-    surfaceInverse: '#123B36',
+    surfaceTertiary: '#E4EDF7',
+    surfaceInverse: '#17395C',
     onSurfaceInverse: '#FFFFFF',
 
     // 5.1:1 against white — safe for white text on a solid brand button.
-    brand: '#0E7C6B',
-    brandDark: '#0A5F53',
-    brandLight: '#DDF2EE',
+    brand: '#2570B8',
+    brandDark: '#1B558C',
+    brandLight: '#DEEBF7',
     onBrand: '#FFFFFF',
 
     // The warm accent, kept amber-leaning rather than pink-coral so it can never
     // be mistaken for `error` at a glance. The pale value fills; `marigoldDark`
-    // is the 5.8:1 version used whenever it has to be read.
+    // is the 5.2:1 version used whenever it has to be read.
     marigold: '#FFB48A',
     marigoldDark: '#96551B',
     marigoldLight: '#FFEADF',
-    onMarigold: '#14211F',
+    onMarigold: '#131E2A',
 
-    // A true green rather than another teal, so "done" is its own colour on a
-    // screen whose brand already sits in that corner of the wheel.
-    success: '#2E7D32',
+    // Deep cyan rather than green, so it is still clearly its own state next to
+    // the brand azure without reaching for a hue this palette has ruled out.
+    success: '#0E6E8C',
     warning: '#8A6A00',
     // Muted brick rather than a hot alarm red — calm enough to sit beside all
     // day, and still unmistakably the emergency colour.
     error: '#A8443C',
     onError: '#FFFFFF',
-    // Blue, because teal is spoken for. 5.5:1.
-    info: '#2A6F97',
+    // Violet, because blue is spoken for twice over. 6.2:1.
+    info: '#5A55B5',
 
-    border: '#DDE9E6',
-    borderStrong: '#B8CCC8',
-    muted: '#61736F',
-    onSurfaceSecondary: '#2F4340',
+    border: '#D9E4F2',
+    borderStrong: '#B3C6DE',
+    muted: '#5A6B80',
+    onSurfaceSecondary: '#2E3F52',
   },
   // The single source of truth for type size. Screens name a step, never a pixel,
   // so the "Larger text" setting can scale every one of them at once.
@@ -75,7 +78,7 @@ export const theme = {
 
 /**
  * Diagonal multi-stop gradients — a sweep from a lighter corner into a deeper
- * one — built from Sunshine's teal and peach.
+ * one — built from Sunshine's azure and peach.
  *
  * Each sweep spans roughly a 4x luminance range, so the fade is clearly visible
  * rather than a flat colour with a hint of shading. The lightest stop of every
@@ -83,20 +86,20 @@ export const theme = {
  * is what buys the width while keeping a label legible across the whole face.
  */
 export const gradients = {
-  brand: ["#0E8270", "#0E7C6B", "#08574C"],
-  success: ["#31852F", "#2E7D32", "#175A1B"],
+  brand: ["#2A76BE", "#2570B8", "#1A4F84"],
+  success: ["#12788F", "#0E6E8C", "#08506A"],
   // A muted rose-brick rather than a hot red. On a screen an older adult looks
   // at all day, a bright alarm colour sitting there permanently reads as being
   // shouted at — this stays clearly the emergency colour without the glare.
   danger: ["#B15E52", "#9A3F38", "#6E2420"],
-  /** Blue, deep enough across the whole sweep to carry white text. */
-  info: ["#2F7BA6", "#2A6F97", "#1A5273"],
+  /** Violet, deep enough across the whole sweep to carry white text. */
+  info: ["#6560C4", "#5A55B5", "#403C8C"],
   /** Carries dark text, so it can stay bright — peach through to apricot. */
   sunrise: ["#FFDCC0", "#FFB48A", "#FF9166"],
-  /** The logo mark: a sun rising out of peach into deep teal. */
-  logo: ["#FFE3CC", "#FFB48A", "#5FC4AE", "#0E7C6B"],
+  /** The logo mark: a sun rising out of peach into deep azure. */
+  logo: ["#FFE3CC", "#FFB48A", "#6BA8DE", "#2570B8"],
   /** Soft tints for icon wells and cards. */
-  brandSoft: ["#EFF7F5", "#E1EFEC"],
+  brandSoft: ["#F1F6FC", "#E3EDF8"],
   sunriseSoft: ["#FFF3EC", "#FFE7DA"],
 } as const;
 
