@@ -69,7 +69,14 @@ export default function ElderContent() {
   const [cat, setCat] = useState("All");
   const [active, setActive] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [itemH, setItemH] = useState(0);
+  // Start at the window height rather than zero.
+  //
+  // Tabs stay mounted, so this screen is first laid out while hidden and
+  // `onLayout` reports a height of 0. Nothing re-measures it when the tab
+  // becomes visible, so a feed gated on a non-zero height showed a spinner
+  // forever. The window is a good enough opening guess, and the measurement
+  // below refines it the moment a real one arrives.
+  const [itemH, setItemH] = useState(Dimensions.get("window").height);
   const [reactFor, setReactFor] = useState<Reel | null>(null);
   const [commentFor, setCommentFor] = useState<Reel | null>(null);
   const [toast, setToast] = useState("");
@@ -151,8 +158,16 @@ export default function ElderContent() {
   }).current;
 
   return (
-    <View style={styles.root} testID="elder-content" onLayout={(e) => setItemH(e.nativeEvent.layout.height)}>
-      {loading || itemH === 0 ? (
+    <View
+      style={styles.root}
+      testID="elder-content"
+      // Ignore zero: that is the hidden-tab measurement, not a real one.
+      onLayout={(e) => {
+        const h = e.nativeEvent.layout.height;
+        if (h > 0) setItemH(h);
+      }}
+    >
+      {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.marigold} /></View>
       ) : (
         <FlatList
