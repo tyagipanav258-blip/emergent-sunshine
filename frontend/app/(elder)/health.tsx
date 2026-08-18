@@ -28,6 +28,15 @@ const TYPE_ICON: Record<string, any> = { tablet: "ellipse", capsule: "medical", 
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/** How soon she wants it. Asked before a request that depends on timing. */
+type Urgency = "urgent" | "soon" | "flexible";
+
+const URGENCY_CHOICES: { key: Urgency; label: string; detail: string; icon: any }[] = [
+  { key: "urgent", label: "As soon as possible", detail: "Today or tomorrow if we can", icon: "flash" },
+  { key: "soon", label: "In the next few days", detail: "Whenever there is a good slot", icon: "calendar" },
+  { key: "flexible", label: "No rush", detail: "Any time that suits the doctor", icon: "leaf" },
+];
+
 type Explainer = {
   name: string;
   what_for: string;
@@ -54,6 +63,8 @@ export default function ElderHealth() {
   const [removing, setRemoving] = useState(false);
   const [explain, setExplain] = useState<{ med: Med; busy: boolean; data?: Explainer; error?: string } | null>(null);
   const [stepsOpen, setStepsOpen] = useState(false);
+  // Which request is waiting on a "how soon?" answer before it is raised.
+  const [urgencyFor, setUrgencyFor] = useState<{ request: string; title: string } | null>(null);
   const [assign, setAssign] = useState<{ taskId: string; title: string; busy?: boolean; done?: string } | null>(null);
   const [family, setFamily] = useState<{ id: string; name: string }[]>([]);
   const steps = useSteps();
@@ -73,7 +84,7 @@ export default function ElderHealth() {
 
   // Hide the floating buttons whenever a sheet is open, so they never sit on
   // top of its controls.
-  const anySheetOpen = Boolean(ocr.open || concierge.open || undo || remove || explain || stepsOpen || assign);
+  const anySheetOpen = Boolean(ocr.open || concierge.open || undo || remove || explain || stepsOpen || assign || urgencyFor);
   // Tabs stay mounted when you switch away, so suppression has to follow focus
   // as well as the sheet. Without this, opening a sheet here and tapping another
   // tab leaves the floating buttons invisible and dead on every other screen.
@@ -177,12 +188,15 @@ export default function ElderHealth() {
    * Creating a request no longer finishes it — the elder still has to say who
    * should do it, so nothing is silently dropped on the family.
    */
-  const sendConcierge = async (preset?: string) => {
+  const sendConcierge = async (preset?: string, urgency?: Urgency) => {
     const text = preset || concierge.text;
     if (!text.trim()) return;
     setConcierge((c) => ({ ...c, busy: true }));
     try {
-      const t = await apiFetch<any>("/concierge/request", { method: "POST", body: { request: text } });
+      const t = await apiFetch<any>("/concierge/request", {
+        method: "POST",
+        body: { request: text, urgency: urgency || null },
+      });
       setConcierge({ open: false, text: "" });
       setAssign({ taskId: t.id, title: t.title });
     } catch {
@@ -446,7 +460,14 @@ export default function ElderHealth() {
             <AppText style={styles.section}>Care & Concierge</AppText>
             <View style={styles.grid}>
               <GridBtn image={ICON_REORDER} label="Reorder medicine" onPress={() => sendConcierge("Please reorder my low medicines")} />
-              <GridBtn image={ICON_DOCTOR} label="Book a doctor" onPress={() => sendConcierge("Please book a doctor appointment for me")} />
+              <GridBtn
+                image={ICON_DOCTOR}
+                label="Book a doctor"
+                onPress={() => setUrgencyFor({
+                  request: "Please book a doctor appointment for me",
+                  title: "How soon would you like to see the doctor?",
+                })}
+              />
               <GridBtn image={ICON_TRANSPORT} label="Arrange transport" onPress={() => sendConcierge("Please arrange transport for my appointment")} />
             </View>
             <Pressable
@@ -678,6 +699,43 @@ export default function ElderHealth() {
               accessibilityRole="button" accessibilityLabel="Close">
               <AppText style={styles.primaryBtnText}>Close</AppText>
             </GradientButton>
+          </View>
+        </View>
+      )}
+
+      {/* How soon — asked before a request whose whole point is timing. */}
+      {urgencyFor && (
+        <View style={styles.backdrop} testID="urgency-sheet">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setUrgencyFor(null)} accessibilityLabel="Close" />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
+            <View style={styles.handle} />
+            <AppText style={styles.sheetTitle}>{urgencyFor.title}</AppText>
+            <View style={{ alignSelf: "stretch", gap: 12, marginTop: 8 }}>
+              {URGENCY_CHOICES.map((c) => (
+                <Pressable
+                  key={c.key}
+                  style={styles.urgencyBtn}
+                  onPress={() => {
+                    if (Platform.OS !== "web") Haptics.selectionAsync();
+                    const req = urgencyFor.request;
+                    setUrgencyFor(null);
+                    sendConcierge(req, c.key);
+                  }}
+                  testID={`urgency-${c.key}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${c.label}. ${c.detail}`}
+                >
+                  <View style={styles.urgencyIcon}>
+                    <Ionicons name={c.icon} size={26} color={theme.colors.brand} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <AppText style={styles.urgencyLabel}>{c.label}</AppText>
+                    <AppText style={styles.urgencyDetail}>{c.detail}</AppText>
+                  </View>
+                  <Ionicons name="chevron-forward" size={22} color={theme.colors.muted} />
+                </Pressable>
+              ))}
+            </View>
           </View>
         </View>
       )}
@@ -989,6 +1047,17 @@ const styles = StyleSheet.create({
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
   sheet: { backgroundColor: theme.colors.surface, borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24, alignItems: "center", gap: 14 },
   handle: { width: 44, height: 5, borderRadius: 3, backgroundColor: theme.colors.borderStrong },
+  urgencyBtn: {
+    flexDirection: "row", alignItems: "center", gap: 14,
+    backgroundColor: theme.colors.surfaceSecondary, borderRadius: theme.radius.lg,
+    borderWidth: 2, borderColor: theme.colors.border, padding: 16, minHeight: 82,
+  },
+  urgencyIcon: {
+    width: 50, height: 50, borderRadius: 25, alignItems: "center", justifyContent: "center",
+    backgroundColor: theme.colors.brandLight,
+  },
+  urgencyLabel: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
+  urgencyDetail: { fontSize: theme.font.sm, color: theme.colors.onSurfaceSecondary, marginTop: 2 },
   sheetTitle: { fontSize: 22, fontWeight: "800", color: theme.colors.onSurface, textAlign: "center" },
   sheetSub: { fontSize: 16, color: theme.colors.onSurfaceSecondary, textAlign: "center", lineHeight: 22 },
   ocrBusy: { alignItems: "center", gap: 12, paddingVertical: 20 },

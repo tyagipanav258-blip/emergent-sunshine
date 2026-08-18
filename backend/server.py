@@ -1584,11 +1584,23 @@ async def prescription_image(
 
 
 # ============================ CONCIERGE / TASKS ============================
-async def _create_task(elder_id: str, kind: str, title: str, detail: str, med_id: str = None, auto: bool = False):
+# How soon she wants it. Carried on the task because whoever fulfils it — a
+# family member, an operator, or an agent placing a call — needs to know whether
+# to take the first slot going or hold out for a convenient one.
+URGENCIES = ("urgent", "soon", "flexible")
+
+
+async def _create_task(
+    elder_id: str, kind: str, title: str, detail: str, med_id: str = None, auto: bool = False,
+    urgency: str = None, preferred_days: str = None, preferred_time: str = None,
+):
     task = {
         "id": str(uuid.uuid4()), "elder_id": elder_id, "kind": kind,
         "title": title, "detail": detail, "med_id": med_id,
         "status": "requested", "auto": auto,
+        "urgency": urgency if urgency in URGENCIES else None,
+        "preferred_days": (preferred_days or "").strip() or None,
+        "preferred_time": (preferred_time or "").strip() or None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "timeline": [{"status": "requested", "at": datetime.now(timezone.utc).isoformat(), "by": "elder" if not auto else "system"}],
     }
@@ -1599,6 +1611,9 @@ async def _create_task(elder_id: str, kind: str, title: str, detail: str, med_id
 
 class ConciergeIn(BaseModel):
     request: str
+    urgency: Optional[str] = None
+    preferred_days: Optional[str] = None
+    preferred_time: Optional[str] = None
 
 @api.post("/concierge/request")
 async def concierge_request(b: ConciergeIn, u: dict = Depends(current_user)):
@@ -1633,7 +1648,10 @@ async def concierge_request(b: ConciergeIn, u: dict = Depends(current_user)):
     eid = await elder_id_for(u)
     if not eid:
         raise HTTPException(404, "No family account linked")
-    task = await _create_task(eid, kind if kind in {"reorder", "doctor", "transport", "other"} else "other", title, detail)
+    task = await _create_task(
+        eid, kind if kind in {"reorder", "doctor", "transport", "other"} else "other", title, detail,
+        urgency=b.urgency, preferred_days=b.preferred_days, preferred_time=b.preferred_time,
+    )
     # A request the family raised is theirs to see through, so say who asked.
     if u["role"] == "child":
         await db.tasks.update_one({"id": task["id"]}, {"$set": {"raised_by": u["id"], "raised_by_name": u.get("name")}})
@@ -2369,7 +2387,11 @@ AGENT_SYS = (
     "arrange_transport=arrange a taxi; im_okay=reassure family; sos=emergency alert; answer=just answer her question. "
     "For order_medicine, book_doctor and arrange_transport also return "
     "\"who\": \"family\" if she said her family or a relative should do it, "
-    "\"concierge\" if she said Sunshine or you should do it, or null if she did not say. "
+    "\"concierge\" if she said Sunshine or you should do it, or null if she did not say, and "
+    "\"urgency\": \"urgent\" if she wants it as soon as possible, \"soon\" if within the next few days, "
+    "\"flexible\" if there is no hurry, or null if she did not say, and "
+    "\"preferred_days\" (e.g. 'Monday or Tuesday', or null) and "
+    "\"preferred_time\" (e.g. 'morning' or 'after 4 PM', or null). "
     "If it is a general question, use intent 'answer'. No emojis, no jargon."
 )
 
@@ -2389,7 +2411,11 @@ async def _run_agent(elder: dict, message: str) -> dict:
     roster = ", ".join(f"{c['name']} ({c['relation']})" for c in contacts) or "nobody yet"
     parsed = {"reply": "", "intent": "answer", "name": None, "medicine": None, "dose": None,
               "time": None, "med_type": None, "per_day": None, "message": None, "details": None,
-              "who": None}
+              "who": None, "urgency": None, "preferred_days": None, "preferred_time": None}
+    # Whether the model actually answered. A failure here used to be
+    # indistinguishable from a real reply, which made a dead API key look like a
+    # working assistant that had nothing to say.
+    llm_ok = bool(EMERGENT_LLM_KEY)
     try:
         # The same snapshot the chat gets, so a spoken "when do I see the doctor?"
         # lands on the real date instead of a confident invention.
@@ -2403,7 +2429,11 @@ async def _run_agent(elder: dict, message: str) -> dict:
         if mm:
             got = json.loads(mm.group(0))
             parsed.update({k: got.get(k, parsed[k]) for k in parsed})
+        else:
+            llm_ok = False
+            logger.warning("agent returned no JSON: %s", raw[:200])
     except Exception:
+        llm_ok = False
         logger.exception("agent llm failed")
 
     intent = parsed.get("intent") or "answer"
@@ -2496,7 +2526,12 @@ async def _run_agent(elder: dict, message: str) -> dict:
             "book_doctor": ("doctor", "Book a doctor", "Please book a doctor consultation."),
             "arrange_transport": ("transport", "Arrange transport", "Please arrange transport."),
         }[intent]
-        task = await _create_task(eid, kind, title, parsed.get("details") or fallback_detail)
+        task = await _create_task(
+            eid, kind, title, parsed.get("details") or fallback_detail,
+            urgency=parsed.get("urgency"),
+            preferred_days=parsed.get("preferred_days"),
+            preferred_time=parsed.get("preferred_time"),
+        )
         who = parsed.get("who") if parsed.get("who") in ASSIGNEES else None
 
         if who:
@@ -2527,9 +2562,15 @@ async def _run_agent(elder: dict, message: str) -> dict:
             )
     else:
         if not reply:
-            reply = "I'm here to help. You can ask me to mark medicines, arrange a refill, or reach your family."
+            # Say which of the two silences this is. "I could not reach my
+            # thinking" is a fault to chase; the menu is a genuine invitation.
+            reply = (
+                "I'm here to help. You can ask me to mark medicines, arrange a refill, or reach your family."
+                if llm_ok else
+                "I'm sorry, I couldn't think properly just then. Please try once more in a moment."
+            )
 
-    return {"reply": reply, "action": action, "executed": executed, "intent": intent}
+    return {"reply": reply, "action": action, "executed": executed, "intent": intent, "degraded": not llm_ok}
 
 
 class AgentTextIn(BaseModel):
