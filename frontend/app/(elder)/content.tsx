@@ -5,11 +5,13 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
+import { useFocusEffect } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { apiFetch, logActivity } from "@/src/api";
 import { CommentSheet } from "@/src/components/CommentSheet";
 import { ReactionSheet } from "@/src/components/ReactionSheet";
+import { useScrollChrome } from "@/src/scroll-context";
 import { theme } from "@/src/theme";
 
 const { width: SCREEN_W } = Dimensions.get("window");
@@ -31,6 +33,20 @@ export default function ElderContent() {
   const [reactFor, setReactFor] = useState<Reel | null>(null);
   const [commentFor, setCommentFor] = useState<Reel | null>(null);
   const [toast, setToast] = useState("");
+  const { setChromeSuppressed } = useScrollChrome();
+
+  // Hide the floating assistant/SOS buttons whenever a reaction or comment
+  // sheet is open, so a tap on the sheet never lands on the FAB behind it.
+  const anySheetOpen = Boolean(reactFor || commentFor);
+  const [focused, setFocused] = useState(true);
+  useFocusEffect(useCallback(() => {
+    setFocused(true);
+    return () => setFocused(false);
+  }, []));
+  useEffect(() => {
+    setChromeSuppressed(focused && anySheetOpen);
+  }, [focused, anySheetOpen, setChromeSuppressed]);
+  useEffect(() => () => setChromeSuppressed(false), [setChromeSuppressed]);
 
   const load = useCallback(async (c: string) => {
     setLoading(true);
