@@ -175,6 +175,19 @@ export function Button({
   );
 }
 
+/**
+ * A small marker for a feature that is built but not switched on yet — calling
+ * out ahead of it, rather than letting it sit there looking like it should be
+ * working and quietly doing nothing.
+ */
+export function ComingSoonBadge() {
+  return (
+    <View style={styles.soon}>
+      <AppText style={styles.soonText}>Coming soon</AppText>
+    </View>
+  );
+}
+
 /** A filter or category pill. Selected reads as filled, not merely outlined. */
 export function Chip({
   label, selected, onPress, testID,
@@ -303,7 +316,7 @@ export function Row({
  * behind it without spending a whole row saying so.
  */
 export function SectionHeader({
-  title, hint, actionLabel, onAction, onDark,
+  title, hint, actionLabel, onAction, onDark, badge,
 }: {
   title: string;
   hint?: string;
@@ -311,11 +324,16 @@ export function SectionHeader({
   onAction?: () => void;
   /** Sitting on the dark end of the gradient, so it needs white type. */
   onDark?: boolean;
+  /** e.g. a "Coming soon" pill — for a section that describes work in progress. */
+  badge?: React.ReactNode;
 }) {
   return (
     <View style={styles.sectionHead}>
       <View style={styles.sectionRow}>
-        <AppText style={[styles.sectionTitle, onDark && { color: "#fff" }]}>{title}</AppText>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexShrink: 1 }}>
+          <AppText style={[styles.sectionTitle, onDark && { color: "#fff" }]}>{title}</AppText>
+          {badge}
+        </View>
         {actionLabel && onAction && (
           <Pressable
             onPress={() => { tap(); onAction(); }}
@@ -417,6 +435,11 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: theme.font.md, fontWeight: "800", color: theme.colors.onSurface },
   sectionAction: { fontSize: theme.font.sm, fontWeight: "700", color: theme.colors.brand },
   sectionHint: { fontSize: theme.font.sm, color: theme.colors.muted, marginTop: 2, lineHeight: 21 },
+  soon: {
+    backgroundColor: theme.colors.marigoldLight, borderRadius: theme.radius.pill,
+    paddingHorizontal: 10, paddingVertical: 4,
+  },
+  soonText: { fontSize: 11, fontWeight: "800", color: theme.colors.marigoldDark, letterSpacing: 0.2 },
 
   // Sitting on the dark end of the gradient: white on blue, so it carries its
   // own contrast rather than borrowing the page's.

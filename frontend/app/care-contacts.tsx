@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { apiFetch } from "@/src/api";
 import { useAuth } from "@/src/auth";
-import { Button, IconWell, SectionHeader } from "@/src/components/ui";
+import { Button, ComingSoonBadge, IconWell, SectionHeader } from "@/src/components/ui";
 import { theme } from "@/src/theme";
 
 /**
@@ -120,11 +120,19 @@ export default function CareContacts() {
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.brand} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
+          {/*
+            Today, SOS sends everyone below an alert at once — it does not yet
+            dial through them in order. Said plainly here rather than letting
+            "we call these people" describe a cascade that isn't switched on,
+            which would read as broken rather than as what it actually is: not
+            built yet.
+          */}
           <SectionHeader
             title="In an emergency"
+            badge={<ComingSoonBadge />}
             hint={isElder
-              ? "If you press SOS, we call these people in this order until someone answers."
-              : "We call these in order until someone answers. Anyone without a number is skipped."}
+              ? "If you press SOS, everyone below is alerted straight away. Calling them in order, one at a time, is coming soon."
+              : "Everyone below is alerted the moment SOS is pressed. Calling in order — moving to the next person if one doesn't answer — is coming soon."}
           />
 
           {chain.length === 0 && (
@@ -170,7 +178,17 @@ export default function CareContacts() {
             <AppText style={styles.addText}>Add a neighbour or friend</AppText>
           </Pressable>
 
-          <SectionHeader title="Doctors &amp; clinics" hint="Numbers we can ring to arrange an appointment." />
+          {/*
+            No screen anywhere triggers the backend's call-the-clinic endpoint
+            yet, so today this list is only a reference for whoever picks up
+            the phone themselves. Said that way rather than "we'll call them",
+            which nothing currently does.
+          */}
+          <SectionHeader
+            title="Doctors &amp; clinics"
+            badge={<ComingSoonBadge />}
+            hint="Save their numbers here. Sunshine calling to arrange the appointment for you is coming soon — for now, use the number to call yourself."
+          />
 
           {doctors.length === 0 && (
             <AppText style={styles.empty} testID="doctors-empty">
